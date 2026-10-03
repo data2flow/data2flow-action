@@ -25,6 +25,7 @@
         <tomcat.version>11.0.26</tomcat.version>
         <jackson-bom.version>3.1.7</jackson-bom.version>
         <data2flow-contracts.version>0.1.0-SNAPSHOT</data2flow-contracts.version>
+        <mockwebserver.version>4.12.0</mockwebserver.version>
     </properties>
 
     <!-- data2flow-contracts·data2flow-bom은 GitHub Packages에 있다. 읽기에도 토큰이 필요하다(README 참고) -->
@@ -71,6 +72,41 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- 기준 저장소: PostgreSQL 18, 스키마 data2flow_action(ADR-019, erd/action.md). staging만 Flyway migrate(ADR-030) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-flyway</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <!-- RabbitMQ AMQP(ADR-020): action.commands Quorum 큐 소비(수동 ACK), action.events 소비, data2flow.config 수신,
+             아웃박스 → data2flow.events 발행(publisher confirm). MPL-2.0/Apache-2.0 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+        </dependency>
+        <!-- core-api 내부 API(제어 프로필·샌드박스·권한·감사)와 simulator 내부 API(virtual 드라이버) 호출 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-restclient</artifactId>
+        </dependency>
+        <!-- MQTT 일반 드라이버(ACT-03.02). Apache-2.0, 버전은 data2flow-bom. 기본 꺼짐이고 공용 브로커 주소는 거부한다(CLAUDE.md §5) -->
+        <dependency>
+            <groupId>com.hivemq</groupId>
+            <artifactId>hivemq-mqtt-client</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
@@ -79,6 +115,45 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- 공통 ArchUnit 규칙·공유 메시지 픽스처(ActionRequest·M3 이벤트)·메시지 스키마 검사 -->
+        <dependency>
+            <groupId>net.java21.data2flow</groupId>
+            <artifactId>data2flow-contracts-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit5</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- *IT·드라이버 계약: PostgreSQL 18·RabbitMQ 3.13·Mosquitto 컨테이너(공용 브로커·s3·s4에는 붙지 않는다, CLAUDE.md §5). MIT -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- 가짜 simulator·core 내부 API(외부 HTTP 대역, testing/backend.md). Apache-2.0 -->
+        <dependency>
+            <groupId>com.squareup.okhttp3</groupId>
+            <artifactId>mockwebserver</artifactId>
+            <version>${mockwebserver.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

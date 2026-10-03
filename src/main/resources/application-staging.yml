@@ -1,5 +1,15 @@
 # staging: JSON 로그(요청 ID는 MDC requestId), 비밀값은 k8s Secret 환경변수
+# Flyway migrate는 staging 배포 때만(expand 마이그레이션, ADR-030). 시뮬레이터 데이터만 쓰는 staging 전용 조직만 다룬다
 logging:
   structured:
     format:
       console: ecs
+    json:
+      customizer: net.java21.data2flow.contracts.secret.SecretMaskingJsonMembersCustomizer
+spring:
+  datasource:
+    url: jdbc:postgresql://${DATA2FLOW_DB_HOST_INTERNAL}:${DATA2FLOW_DB_PORT}/${DATA2FLOW_DB_NAME}?ApplicationName=data2flow-action
+data2flow:
+  action:
+    env: stg
+    flyway-mode: migrate

@@ -1,4 +1,4 @@
-# 공통 설정(design/conventions.md §4). 환경별 값은 application-{local,staging,prod}.yml, 비밀값은 환경변수.
+# 공통 설정(design/conventions.md §4). 환경별 값은 application-{local,staging,prod}.yml, 비밀값은 환경변수(.env / k8s Secret).
 spring:
   application:
     name: data2flow-action
@@ -8,7 +8,36 @@ spring:
     virtual:
       enabled: true
   lifecycle:
+    # 종료 순서(reliability-and-ha.md §4): 큐 소비 중지 → 처리 중 메시지 완료·ACK → 아웃박스 마지막 릴레이 → 연결 종료
     timeout-per-shutdown-phase: 30s
+  # 기준 저장소: s3 공용 PostgreSQL DB data2flow, 스키마 data2flow_action(ADR-019, erd/action.md). 값은 환경변수
+  datasource:
+    url: jdbc:postgresql://${DATA2FLOW_DB_HOST:localhost}:${DATA2FLOW_DB_PORT:5432}/${DATA2FLOW_DB_NAME:data2flow}?ApplicationName=data2flow-action
+    username: ${DATA2FLOW_DB_USERNAME:data2flow}
+    password: ${DATA2FLOW_DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: 10
+      connection-init-sql: SET TIME ZONE 'UTC'
+  flyway:
+    schemas: data2flow_action
+    default-schema: data2flow_action
+    create-schemas: true
+  # RabbitMQ AMQP(s4, vhost: prod data2flow · staging data2flow-stg · local data2flow-dev, ADR-020·030)
+  rabbitmq:
+    host: ${DATA2FLOW_RABBITMQ_HOST:localhost}
+    port: ${DATA2FLOW_RABBITMQ_PORT:5672}
+    virtual-host: ${DATA2FLOW_RABBITMQ_VHOST:data2flow-dev}
+    username: ${DATA2FLOW_RABBITMQ_USERNAME:guest}
+    password: ${DATA2FLOW_RABBITMQ_PASSWORD:guest}
+    publisher-confirm-type: correlated
+    connection-timeout: 5s
+  jackson:
+    deserialization:
+      fail-on-null-for-primitives: false
+  messages:
+    basename: messages
+    encoding: UTF-8
+    fallback-to-system-locale: false
 server:
   port: 8080
   shutdown: graceful
@@ -25,6 +54,45 @@ management:
     health:
       probes:
         enabled: true
+      group:
+        readiness:
+          include: readinessState,db,rabbit
   metrics:
     tags:
       application: ${spring.application.name}
+
+data2flow:
+  action:
+    env: ${DATA2FLOW_ACTION_ENV:dev}
+    # 파드 이름(MQTT client-id 순번)
+    instance-id: ${HOSTNAME:action-local-0}
+    flyway-mode: validate
+    core-uri: ${DATA2FLOW_CORE_URI:http://data2flow-core-api}
+    simulator-uri: ${DATA2FLOW_SIMULATOR_URI:http://data2flow-simulator}
+    profile-ttl: 30s
+    scheduler:
+      enabled: true
+      period: 1s
+      batch: 100
+    outbox:
+      relay-enabled: true
+      interval: 1s
+      batch-size: 100
+      retention: 7d
+    command:
+      ack-timeout: 30s
+      apply-timeout: 60s
+      retry-max-attempts: 3
+      retry-initial: 1s
+      retry-multiplier: 2
+      retry-max: 10s
+      wait-max: 10s
+      default-validity: 600s
+    # MQTT 일반 드라이버(ACT-03.02). ⏸ 결정 대기: 공용 플랫폼 브로커(iot-data.java21.net)에는 명령을 발행하지 않는다(CLAUDE.md §5).
+    # 기본 꺼짐이고, 켜도 공용 브로커 주소는 거부한다. 지금은 Testcontainers Mosquitto로만 쓴다
+    mqtt:
+      enabled: false
+      host: ${DATA2FLOW_ACTION_MQTT_HOST:}
+      port: ${DATA2FLOW_ACTION_MQTT_PORT:1883}
+      denied-hosts: iot-data.java21.net
+      qos: 1

@@ -1,0 +1,12 @@
+# 시험 프로필: Testcontainers PostgreSQL·RabbitMQ, 가짜 core·simulator(MockWebServer). 주기 작업은 끄고 시험이 직접 부른다
+data2flow:
+  action:
+    env: test
+    flyway-mode: migrate
+    scheduler:
+      enabled: false
+    outbox:
+      relay-enabled: false
+logging:
+  level:
+    net.java21.data2flow: INFO

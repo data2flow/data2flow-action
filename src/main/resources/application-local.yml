@@ -1,4 +1,17 @@
 # 로컬 개발. 인프라는 s3 SSH 터널·공용 개발 DB로 붙는다(design/deployment.md §8.2). 비밀값은 루트 .env
+# 공용 DB이므로 Flyway는 validate만(ADR-030). 로컬은 행동 서비스라 실제 소스 데이터로 돌면 운영과 같은 장비에 제어가 한 번 더 나갈 수 있다:
+# 큐 소비·기한 작업·아웃박스 릴레이를 끄고(드라이런) 내부 API만 쓴다. 켜려면 개발용 조직·가상 기기로만 시험한다
 logging:
   level:
     net.java21.data2flow: DEBUG
+data2flow:
+  action:
+    env: dev
+    core-uri: ${DATA2FLOW_CORE_URI:http://localhost:8082}
+    simulator-uri: ${DATA2FLOW_SIMULATOR_URI:http://localhost:8086}
+    scheduler:
+      enabled: ${DATA2FLOW_ACTION_SCHEDULER_ENABLED:false}
+    outbox:
+      relay-enabled: ${DATA2FLOW_ACTION_RELAY_ENABLED:false}
+    messaging:
+      enabled: ${DATA2FLOW_ACTION_MESSAGING_ENABLED:false}
