@@ -29,7 +29,7 @@ public record ControlProfile(long deviceId, long organizationId, Long spaceId, S
     public static final String STATUS_ACTIVE = "ACTIVE";
 
     public ControlProfile {
-        capabilities = capabilities == null ? Map.of() : Map.copyOf(capabilities);
+        capabilities = capabilities == null ? Map.of() : java.util.Collections.unmodifiableMap(new java.util.LinkedHashMap<>(capabilities));
         settings = settings == null ? ControlSettings.DEFAULT : settings;
         status = status == null ? STATUS_ACTIVE : status;
     }

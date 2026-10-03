@@ -83,7 +83,7 @@ class DriverAckIT extends IntegrationTestSupport {
                 Map.of("Switch", Map.of("on", true)), clock.instant(), true));
 
         await().atMost(Duration.ofSeconds(5)).until(() ->
-                count("SELECT reported_version FROM data2flow_action.device_shadows WHERE device_id = 15") == 9);
+                count("SELECT coalesce(max(reported_version), 0) FROM data2flow_action.device_shadows WHERE device_id = 15") == 9);
         Result shadow = get(api(Fixtures.USER, Fixtures.ORG), "/internal/action/devices/15/shadow");
         assertThat(shadow.response().path("reported").path("Thermostat").path("mode").asString()).isEqualTo("cool");
     }

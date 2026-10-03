@@ -65,8 +65,11 @@ class ManualControlIT extends IntegrationTestSupport {
         Result control = get(operator, "/internal/action/devices/" + Fixtures.AIRCON + "/control");
         assertThat(control.response().path("manualOverride").path("capability").asString()).isEqualTo("Thermostat");
         assertThat(control.response().path("controllable").asBoolean()).isTrue();
-        assertThat(control.response().path("capabilities").get(0).path("effectiveConstraints").path("targetTemperature").path("max")
-                .asDouble()).isEqualTo(28.0);
+        JsonNode thermostat = control.response().path("capabilities").valueStream()
+                .filter(c -> c.path("name").asString().equals("Thermostat")).findFirst().orElseThrow();
+        assertThat(thermostat.path("effectiveConstraints").path("targetTemperature").path("max").asDouble()).isEqualTo(28.0);
+        assertThat(thermostat.path("effectiveConstraints").path("targetTemperature").path("min").asDouble()).isEqualTo(18.0);
+        assertThat(thermostat.path("commands").get(0).path("name").asString()).isEqualTo("set");
         // 감사(IAM-06.01 DEVICE_COMMAND)는 아웃박스로 core에 간다
         await().atMost(Duration.ofSeconds(5)).until(() -> {
             relay.relayOnce();
