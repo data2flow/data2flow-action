@@ -90,6 +90,13 @@
             <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
         </dependency>
+        <!-- Sink(FLW-04.02): MySQL 대상은 MariaDB Connector/J(LGPL-2.1, 수정 없이 사용 — ADR-018 조건부 허용)로 쓴다.
+             MySQL Connector/J는 GPL-2.0 + FOSS 예외라 허용 목록 밖이어서 쓰지 않는다. InfluxDB 2는 HTTP 라인 프로토콜(의존성 없음) -->
+        <dependency>
+            <groupId>org.mariadb.jdbc</groupId>
+            <artifactId>mariadb-java-client</artifactId>
+            <scope>runtime</scope>
+        </dependency>
         <!-- RabbitMQ AMQP(ADR-020): action.commands Quorum 큐 소비(수동 ACK), action.events 소비, data2flow.config 수신,
              아웃박스 → data2flow.events 발행(publisher confirm). MPL-2.0/Apache-2.0 -->
         <dependency>
@@ -147,6 +154,12 @@
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>testcontainers-postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Sink 계약·통합 시험: MySQL 8(Testcontainers 모듈), InfluxDB 2(GenericContainer). MIT -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-mysql</artifactId>
             <scope>test</scope>
         </dependency>
         <!-- 가짜 simulator·core 내부 API(외부 HTTP 대역, testing/backend.md). Apache-2.0 -->

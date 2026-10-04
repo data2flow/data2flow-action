@@ -97,11 +97,12 @@ public abstract class IntegrationTestSupport {
     @BeforeEach
     void resetState() {
         clock.set(MutableClock.T0);
-        jdbc.sql("""
-                TRUNCATE data2flow_action.command_events, data2flow_action.commands, data2flow_action.executed_actions,
-                    data2flow_action.processed_messages, data2flow_action.device_shadows, data2flow_action.manual_overrides,
-                    data2flow_action.protection_state, data2flow_action.device_state_history, data2flow_action.outboxes
-                """).update();
+        // 스키마의 모든 업무 테이블을 비운다(M4 sink·notification 패키지가 더한 테이블 포함, Flyway 이력 제외)
+        List<String> tables = jdbc.sql("""
+                SELECT tablename FROM pg_tables WHERE schemaname = 'data2flow_action' AND tablename <> 'flyway_schema_history'
+                  AND tablename NOT LIKE 'device_state_history_%'
+                """).query(String.class).list();
+        jdbc.sql("TRUNCATE " + String.join(", ", tables.stream().map(t -> "data2flow_action." + t).toList()) + " CASCADE").update();
         CORE.reset();
         SIM.reset();
         profiles.invalidateAll();

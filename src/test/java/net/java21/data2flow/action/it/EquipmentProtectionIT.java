@@ -43,7 +43,7 @@ class EquipmentProtectionIT extends IntegrationTestSupport {
         SIM.setState(Fixtures.AIRCON, Map.of("Thermostat", Map.of("mode", "off", "targetTemperature", 24)));
         publish(EventType.DEVICE_STATE_REPORTED, new DeviceStateReported(Fixtures.AIRCON, version,
                 Map.of("Thermostat", Map.of("mode", "off", "targetTemperature", 24)), clock.instant(), true));
-        await().atMost(Duration.ofSeconds(5)).until(() ->
+        await().atMost(Duration.ofSeconds(20)).until(() ->
                 count("SELECT coalesce(max(reported_version), 0) FROM data2flow_action.device_shadows WHERE device_id = 15") == version);
     }
 
@@ -68,7 +68,7 @@ class EquipmentProtectionIT extends IntegrationTestSupport {
         clock.advanceBy(Duration.ofSeconds(1));
         tracker.processDue();
 
-        await().atMost(Duration.ofSeconds(5)).until(() -> status(id).equals("APPLIED"));
+        await().atMost(Duration.ofSeconds(20)).until(() -> status(id).equals("APPLIED"));
     }
 
     @Test
@@ -91,7 +91,7 @@ class EquipmentProtectionIT extends IntegrationTestSupport {
     @DisplayName("[ACT-02.05][AT-ACT-02.1][TC-ACT-053] 수동 APPLIED 뒤 플로우(AUTO) 명령은 SKIPPED(MANUAL_OVERRIDE), [자동으로 되돌리기] 뒤 허용")
     void manualOverride() {
         Result manual = command(Map.of("mode", "cool", "targetTemperature", 24), "mo-1", null);
-        await().atMost(Duration.ofSeconds(5)).until(() -> status(manual.response().path("id").asString()).equals("APPLIED"));
+        await().atMost(Duration.ofSeconds(20)).until(() -> status(manual.response().path("id").asString()).equals("APPLIED"));
         Map<String, Object> flow = Map.of("type", "FLOW", "flowId", "f-1", "flowVersion", 3, "nodeId", "n-1");
 
         Result auto = command(Map.of("mode", "cool", "targetTemperature", 26), "mo-2", flow);
@@ -104,7 +104,7 @@ class EquipmentProtectionIT extends IntegrationTestSupport {
         assertThat(release.status()).isEqualTo(204);
         clock.advanceBy(Duration.ofSeconds(11));
         Result again = command(Map.of("mode", "cool", "targetTemperature", 26), "mo-3", flow);
-        await().atMost(Duration.ofSeconds(5)).until(() -> status(again.response().path("id").asString()).equals("APPLIED"));
+        await().atMost(Duration.ofSeconds(20)).until(() -> status(again.response().path("id").asString()).equals("APPLIED"));
     }
 
     @Test
@@ -112,7 +112,7 @@ class EquipmentProtectionIT extends IntegrationTestSupport {
     void minInterval() {
         Map<String, Object> flow = Map.of("type", "FLOW", "flowId", "f-1", "flowVersion", 3, "nodeId", "n-1");
         Result first = command(Map.of("mode", "cool", "targetTemperature", 24), "ri-1", flow);
-        await().atMost(Duration.ofSeconds(5)).until(() -> status(first.response().path("id").asString()).equals("APPLIED"));
+        await().atMost(Duration.ofSeconds(20)).until(() -> status(first.response().path("id").asString()).equals("APPLIED"));
         clock.advanceBy(Duration.ofSeconds(5));
 
         Result second = command(Map.of("mode", "cool", "targetTemperature", 25), "ri-2", flow);

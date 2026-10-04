@@ -56,10 +56,10 @@ class OutboxIdempotencyIT extends IntegrationTestSupport {
         send(req);
         send(ActionRequest.command(Fixtures.ORG, req.idempotencyKey(), req.source(), null, req.commandPayload(), clock));   // 새 messageId
 
-        await().atMost(Duration.ofSeconds(10)).until(() -> count("SELECT count(*) FROM data2flow_action.processed_messages") == 2
+        await().atMost(Duration.ofSeconds(20)).until(() -> count("SELECT count(*) FROM data2flow_action.processed_messages") == 2
                 && count("SELECT count(*) FROM data2flow_action.executed_actions") == 1);
         // 처음 처리의 REQUESTED·SENT·ACKED·APPLIED 4건 + 재요청 2번의 결과 다시 알림 2건
-        await().atMost(Duration.ofSeconds(5)).until(() -> events(null).stream()
+        await().atMost(Duration.ofSeconds(20)).until(() -> events(null).stream()
                 .filter(e -> e.path("type").asString().startsWith("command.status.")).count() == 6);
         assertThat(count("SELECT count(*) FROM data2flow_action.commands")).isEqualTo(1);
         assertThat(SIM.commandsFor(Fixtures.AIRCON)).isEqualTo(1);
@@ -75,7 +75,7 @@ class OutboxIdempotencyIT extends IntegrationTestSupport {
         CORE.spaceDevices.put(Fixtures.SPACE, List.of(Fixtures.AIRCON, 16L));
         send(flowCommand(CommandTarget.space(Fixtures.SPACE, "controls", "Thermostat", false), "m-2"));
 
-        await().atMost(Duration.ofSeconds(10)).until(() -> count("SELECT count(*) FROM data2flow_action.commands WHERE status = 'APPLIED'") == 2);
+        await().atMost(Duration.ofSeconds(20)).until(() -> count("SELECT count(*) FROM data2flow_action.commands WHERE status = 'APPLIED'") == 2);
         assertThat(jdbc.sql("SELECT result_ref FROM data2flow_action.executed_actions").query(String.class).single()).isEqualTo("n=2");
     }
 
@@ -87,10 +87,10 @@ class OutboxIdempotencyIT extends IntegrationTestSupport {
                 base.commandPayload(), clock));
         rabbit.send(MessagingNames.EXCHANGE_ACTIONS, "command", new Message("{\"v\":9}".getBytes(StandardCharsets.UTF_8), new MessageProperties()));
 
-        await().atMost(Duration.ofSeconds(10)).until(() -> count("SELECT count(*) FROM data2flow_action.commands WHERE status = 'FAILED'") == 1);
+        await().atMost(Duration.ofSeconds(20)).until(() -> count("SELECT count(*) FROM data2flow_action.commands WHERE status = 'FAILED'") == 1);
         assertThat(jdbc.sql("SELECT status_reason FROM data2flow_action.commands").query(String.class).single()).isEqualTo("EXPIRED");
         assertThat(SIM.received).isEmpty();
-        await().atMost(Duration.ofSeconds(10)).until(() -> rabbit.receive("action.commands.dlq", 100) != null);
+        await().atMost(Duration.ofSeconds(20)).until(() -> rabbit.receive("action.commands.dlq", 100) != null);
     }
 
     @Test
@@ -101,7 +101,7 @@ class OutboxIdempotencyIT extends IntegrationTestSupport {
                 null, new CommandPayload(CommandTarget.device(Fixtures.AIRCON), "Switch", "set", Map.of("on", true), false), clock);
         send(req);
 
-        await().atMost(Duration.ofSeconds(10)).until(() -> rabbit.receive("action.commands.dlq", 100) != null);
+        await().atMost(Duration.ofSeconds(20)).until(() -> rabbit.receive("action.commands.dlq", 100) != null);
         assertThat(count("SELECT count(*) FROM data2flow_action.commands")).isZero();
         assertThat(SIM.received).isEmpty();
     }

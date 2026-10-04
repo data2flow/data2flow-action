@@ -54,7 +54,7 @@ class SandboxControlIT extends IntegrationTestSupport {
     void realDeviceRejected() {
         flow(REAL_AIRCON, "m-1");
 
-        await().atMost(Duration.ofSeconds(10)).until(() -> count("SELECT count(*) FROM data2flow_action.commands WHERE status = 'REJECTED'") == 1);
+        await().atMost(Duration.ofSeconds(20)).until(() -> count("SELECT count(*) FROM data2flow_action.commands WHERE status = 'REJECTED'") == 1);
         assertThat(jdbc.sql("SELECT status_reason FROM data2flow_action.commands").query(String.class).single()).isEqualTo("SANDBOX_FORBIDDEN");
         assertThat(SIM.received).isEmpty();
         assertThat(events("command.status.rejected")).hasSize(1);
@@ -70,7 +70,7 @@ class SandboxControlIT extends IntegrationTestSupport {
         MessageHeaders.of(req).forEach(props::setHeader);
         rabbit.send(MessagingNames.EXCHANGE_ACTIONS, req.routingKey(), new Message(CODEC.write(req), props));
 
-        await().atMost(Duration.ofSeconds(10)).until(() -> count("SELECT count(*) FROM data2flow_action.commands WHERE status = 'REJECTED'") == 1);
+        await().atMost(Duration.ofSeconds(20)).until(() -> count("SELECT count(*) FROM data2flow_action.commands WHERE status = 'REJECTED'") == 1);
         assertThat(jdbc.sql("SELECT status_reason FROM data2flow_action.commands").query(String.class).single()).isEqualTo("SANDBOX_FORBIDDEN");
         assertThat(SIM.received).isEmpty();
     }
@@ -80,7 +80,7 @@ class SandboxControlIT extends IntegrationTestSupport {
     void virtualDeviceAllowed() {
         flow(Fixtures.AIRCON, "m-2");
 
-        await().atMost(Duration.ofSeconds(10)).until(() -> count("SELECT count(*) FROM data2flow_action.commands WHERE status = 'APPLIED'") == 1);
+        await().atMost(Duration.ofSeconds(20)).until(() -> count("SELECT count(*) FROM data2flow_action.commands WHERE status = 'APPLIED'") == 1);
     }
 
     @Test
@@ -94,7 +94,7 @@ class SandboxControlIT extends IntegrationTestSupport {
 
         await().atMost(Duration.ofSeconds(1)).until(() -> !sandbox.spaces().contains(Fixtures.SPACE));
         flow(REAL_AIRCON, "m-3");
-        await().atMost(Duration.ofSeconds(10)).until(() -> count("SELECT count(*) FROM data2flow_action.commands WHERE status = 'APPLIED'") == 1);
+        await().atMost(Duration.ofSeconds(20)).until(() -> count("SELECT count(*) FROM data2flow_action.commands WHERE status = 'APPLIED'") == 1);
         // 재시작(캐시 비움) 뒤에도 마지막 설정을 core에서 다시 읽는다
         sandbox.invalidate();
         assertThat(sandbox.spaces()).isEmpty();

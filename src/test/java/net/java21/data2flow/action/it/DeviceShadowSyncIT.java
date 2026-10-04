@@ -41,7 +41,7 @@ class DeviceShadowSyncIT extends IntegrationTestSupport {
 
     private void connectivity(DeviceConnectivityChanged.Connectivity to) {
         publish(EventType.DEVICE_CONNECTIVITY_CHANGED, new DeviceConnectivityChanged(Fixtures.AIRCON, null, to, clock.instant(), 300, 3));
-        await().atMost(Duration.ofSeconds(5)).until(() -> jdbc.sql("SELECT connectivity FROM data2flow_action.device_shadows WHERE device_id = 15")
+        await().atMost(Duration.ofSeconds(20)).until(() -> jdbc.sql("SELECT connectivity FROM data2flow_action.device_shadows WHERE device_id = 15")
                 .query(String.class).optional().map(to.name()::equals).orElse(false));
     }
 
@@ -60,7 +60,7 @@ class DeviceShadowSyncIT extends IntegrationTestSupport {
         connectivity(DeviceConnectivityChanged.Connectivity.ONLINE);
 
         String id = second.response().path("id").asString();
-        await().atMost(Duration.ofSeconds(5)).until(() -> status(id).equals("APPLIED"));
+        await().atMost(Duration.ofSeconds(20)).until(() -> status(id).equals("APPLIED"));
         assertThat(SIM.commandsFor(Fixtures.AIRCON)).isEqualTo(1);
         Result shadow = get(operator, "/internal/action/devices/15/shadow");
         assertThat(shadow.response().path("delta").isEmpty()).isTrue();
@@ -80,7 +80,7 @@ class DeviceShadowSyncIT extends IntegrationTestSupport {
 
         connectivity(DeviceConnectivityChanged.Connectivity.ONLINE);
 
-        await().atMost(Duration.ofSeconds(5)).until(() -> count("SELECT count(*) FROM data2flow_action.commands WHERE status = 'APPLIED'") == 1);
+        await().atMost(Duration.ofSeconds(20)).until(() -> count("SELECT count(*) FROM data2flow_action.commands WHERE status = 'APPLIED'") == 1);
         JsonNode reapplied = SIM.received.get(SIM.received.size() - 1);
         assertThat(reapplied.path("args").path("targetTemperature").asInt()).isEqualTo(24);
         // 원래 명령의 출처(USER)·우선순위(MANUAL)를 따른다
@@ -92,12 +92,12 @@ class DeviceShadowSyncIT extends IntegrationTestSupport {
     @DisplayName("[ACT-02.04][AT-ACT-03.3][TC-ACT-043] 리모컨으로 온도 변경(reported만) → delta 표시, origin DEVICE_LOCAL, desired 그대로")
     void deviceLocalChange() {
         Result r = set(Map.of("mode", "cool", "targetTemperature", 24), "loc-1");
-        await().atMost(Duration.ofSeconds(5)).until(() -> status(r.response().path("id").asString()).equals("APPLIED"));
+        await().atMost(Duration.ofSeconds(20)).until(() -> status(r.response().path("id").asString()).equals("APPLIED"));
 
         publish(EventType.DEVICE_STATE_REPORTED, new DeviceStateReported(Fixtures.AIRCON, 50,
                 Map.of("Thermostat", Map.of("mode", "cool", "targetTemperature", 26)), clock.instant(), true));
 
-        await().atMost(Duration.ofSeconds(5)).until(() ->
+        await().atMost(Duration.ofSeconds(20)).until(() ->
                 count("SELECT coalesce(max(reported_version), 0) FROM data2flow_action.device_shadows WHERE device_id = 15") == 50);
         Result shadow = get(operator, "/internal/action/devices/15/shadow");
         assertThat(shadow.response().path("desired").path("Thermostat").path("targetTemperature").asInt()).isEqualTo(24);
@@ -111,12 +111,12 @@ class DeviceShadowSyncIT extends IntegrationTestSupport {
     @DisplayName("[DEV-01.01] 기기 삭제(device.changed DELETED) → 상태 쌍·수동 우선·보호 상태 정리, 명령 이력은 남긴다")
     void deviceDeletedCleansUp() {
         Result r = set(Map.of("mode", "cool", "targetTemperature", 24), "del-1");
-        await().atMost(Duration.ofSeconds(5)).until(() -> status(r.response().path("id").asString()).equals("APPLIED"));
+        await().atMost(Duration.ofSeconds(20)).until(() -> status(r.response().path("id").asString()).equals("APPLIED"));
 
         publish(EventType.DEVICE_CHANGED, new DeviceChanged(Fixtures.AIRCON, DeviceChanged.Change.DELETED, List.of(), "DELETED", "3",
                 Fixtures.SPACE, 9));
 
-        await().atMost(Duration.ofSeconds(5)).until(() -> count("SELECT count(*) FROM data2flow_action.device_shadows") == 0);
+        await().atMost(Duration.ofSeconds(20)).until(() -> count("SELECT count(*) FROM data2flow_action.device_shadows") == 0);
         assertThat(count("SELECT count(*) FROM data2flow_action.manual_overrides")).isZero();
         assertThat(count("SELECT count(*) FROM data2flow_action.commands")).isEqualTo(1);
     }

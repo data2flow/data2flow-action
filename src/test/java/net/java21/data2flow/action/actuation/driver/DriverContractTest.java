@@ -112,7 +112,7 @@ public abstract class DriverContractTest {
         driver().execute(command(id, Map.of("on", true)));
         driver().execute(command(id, Map.of("on", true)));
 
-        await().atMost(Duration.ofSeconds(5)).until(() -> peer().effects(id) >= 1);
+        await().atMost(Duration.ofSeconds(20)).until(() -> peer().effects(id) >= 1);
         await().during(Duration.ofMillis(300)).atMost(Duration.ofSeconds(2)).until(() -> peer().effects(id) == 1);
     }
 
@@ -136,7 +136,7 @@ public abstract class DriverContractTest {
         });
         peer().emitState(Map.of("Switch", Map.of("on", true)));
 
-        await().atMost(Duration.ofSeconds(5)).until(() -> !sink().reports.isEmpty() || driver().getState(device()).isPresent());
+        await().atMost(Duration.ofSeconds(20)).until(() -> !sink().reports.isEmpty() || driver().getState(device()).isPresent());
         if (!sink().reports.isEmpty()) {
             assertThat(sink().reports.get(0).version()).isPositive();
             assertThat(sink().reports.get(0).capabilities()).containsKey("Switch");

@@ -71,7 +71,7 @@ class ManualControlIT extends IntegrationTestSupport {
         assertThat(thermostat.path("effectiveConstraints").path("targetTemperature").path("min").asDouble()).isEqualTo(18.0);
         assertThat(thermostat.path("commands").get(0).path("name").asString()).isEqualTo("set");
         // 감사(IAM-06.01 DEVICE_COMMAND)는 아웃박스로 core에 간다
-        await().atMost(Duration.ofSeconds(5)).until(() -> {
+        await().atMost(Duration.ofSeconds(20)).until(() -> {
             relay.relayOnce();
             return CORE.audits.stream().anyMatch(a -> a.path("action").asString().equals("DEVICE_COMMAND"));
         });

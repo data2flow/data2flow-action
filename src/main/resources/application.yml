@@ -35,7 +35,7 @@ spring:
     deserialization:
       fail-on-null-for-primitives: false
   messages:
-    basename: messages
+    basename: messages,messages-sink,messages-notification
     encoding: UTF-8
     fallback-to-system-locale: false
 server:
