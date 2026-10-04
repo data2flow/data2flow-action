@@ -1,6 +1,8 @@
 package net.java21.data2flow.action.actuation.domain;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.time.Duration;
 
@@ -11,11 +13,21 @@ import java.time.Duration;
  * @param windowSec   실패율을 보는 창(초)
  * @param openSec     열린 뒤 즉시 실패시키는 시간(초). 지나면 시험 호출 1건(HALF_OPEN)
  * @param minCalls    판정에 필요한 최소 호출 수(호출이 적을 때 한 번 실패로 열리지 않게)
+ *
+ * <p>core가 주는 설정은 필드가 빠질 수 있다(문서 모양 {@code {failureRate, windowSec, openSec}}에는 minCalls가 없음). 빠진 값은 기본값을 쓴다.
+ * 1 미만의 failureRate는 이전 core가 저장한 비율(0.5 = 50%)로 보고 %로 바꾼다.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record CircuitPolicy(double failureRate, int windowSec, int openSec, int minCalls) {
 
     public static final CircuitPolicy DEFAULT = new CircuitPolicy(50, 60, 30, 5);
+
+    @JsonCreator
+    public static CircuitPolicy of(@JsonProperty("failureRate") Double failureRate, @JsonProperty("windowSec") Integer windowSec,
+                                   @JsonProperty("openSec") Integer openSec, @JsonProperty("minCalls") Integer minCalls) {
+        double rate = failureRate == null ? 0 : failureRate < 1 && failureRate > 0 ? failureRate * 100 : failureRate;
+        return new CircuitPolicy(rate, windowSec == null ? 0 : windowSec, openSec == null ? 0 : openSec, minCalls == null ? 0 : minCalls);
+    }
 
     public CircuitPolicy {
         failureRate = failureRate <= 0 || failureRate > 100 ? 50 : failureRate;

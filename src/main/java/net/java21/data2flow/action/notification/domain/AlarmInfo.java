@@ -39,8 +39,13 @@ public record AlarmInfo(long id, String alarmKey, AlarmSeverity severity, AlarmS
             path.add(spaceId);
         }
         JsonNode device = a.path("device");
-        Double value = a.path("lastValue").isNumber() ? a.path("lastValue").asDouble()
-                : a.path("triggerValue").isNumber() ? a.path("triggerValue").asDouble() : null;
+        // 값이 없는 알람(게이트웨이 오프라인 등): 삼항식이 double로 풀리며 null을 언박싱하지 않도록 Double로 둔다
+        Double value = null;
+        if (a.path("lastValue").isNumber()) {
+            value = a.path("lastValue").asDouble();
+        } else if (a.path("triggerValue").isNumber()) {
+            value = a.path("triggerValue").asDouble();
+        }
         return new AlarmInfo(a.path("id").asLong(), text(a, "alarmKey"), severity(text(a, "severity")), status(text(a, "status")),
                 a.path("flapping").asBoolean(false), text(a, "suppressedReason"), text(a, "title"),
                 a.path("source").path("ruleId").isMissingNode() || a.path("source").path("ruleId").isNull() ? null
