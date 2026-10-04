@@ -219,7 +219,7 @@ public class CommandRepository {
                         SELECT e.at, c.id, c.device_id, c.capability, c.command, c.args::text AS args, c.source::text AS source, e.detail->>'message' AS message
                           FROM data2flow_action.command_events e JOIN data2flow_action.commands c ON c.id = e.command_id
                          WHERE e.organization_id = :org AND e.to_status = 'BLOCKED' AND e.reason = 'INTERLOCK'
-                           AND e.detail->>'interlockId' = :interlock AND e.at >= :from AND e.at < :to
+                           AND e.detail->>'interlockId' = :interlock AND e.at >= :from AND e.at <= :to
                          ORDER BY e.at DESC LIMIT :limit""")
                 .param("org", organizationId).param("interlock", Long.toString(interlockId)).param("from", Pg.ts(from)).param("to", Pg.ts(to))
                 .param("limit", limit)

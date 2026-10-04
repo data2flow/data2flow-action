@@ -88,6 +88,10 @@ public abstract class IntegrationTestSupport {
     protected ControlProfileService profiles;
     @Autowired
     protected SandboxRegistry sandbox;
+    @Autowired
+    protected net.java21.data2flow.action.actuation.service.InterlockService interlocks;
+    @Autowired
+    protected net.java21.data2flow.action.actuation.service.EmergencyStopRegistry emergencyStops;
     @LocalServerPort
     protected int port;
 
@@ -107,6 +111,8 @@ public abstract class IntegrationTestSupport {
         SIM.reset();
         profiles.invalidateAll();
         sandbox.invalidate();
+        interlocks.invalidateAll();
+        emergencyStops.invalidate();
         SIM.events = new FakeSimulator.Events() {
             @Override
             public void ack(long deviceId, String commandId, boolean acked) {
@@ -134,6 +140,12 @@ public abstract class IntegrationTestSupport {
         if (eventsQueue != null) {
             rabbitAdmin.deleteQueue(eventsQueue);
         }
+    }
+
+    /** 시험 이벤트 큐에 라우팅 키를 더 묶는다(M4: command.no-effect, driver.circuit.#, control.oscillation.blocked 등) */
+    protected void listen(String routingKey) {
+        rabbitAdmin.declareBinding(BindingBuilder.bind(new Queue(eventsQueue, false, false, false))
+                .to(new TopicExchange(MessagingNames.EXCHANGE_EVENTS, true, false)).with(routingKey));
     }
 
     /** 장비·시뮬레이터가 내는 이벤트(EVT-SIM-03)를 data2flow.events로 발행 */

@@ -87,7 +87,7 @@ public class DriverCallRepository {
         jdbc.sql("""
                         UPDATE data2flow_action.driver_circuits
                            SET state = :state, opened_at = :opened, trial_started_at = :trial,
-                               failure_rate = coalesce(:rate, failure_rate), updated_at = :now
+                               failure_rate = coalesce(CAST(:rate AS double precision), failure_rate), updated_at = :now
                          WHERE driver_id = :d""")
                 .param("state", c.state().name()).param("opened", Pg.ts(c.openedAt())).param("trial", Pg.ts(c.trialStartedAt()))
                 .param("rate", failureRate).param("now", Pg.ts(now)).param("d", driverId)
