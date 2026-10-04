@@ -7,6 +7,10 @@ data2flow:
       enabled: false
     outbox:
       relay-enabled: false
+    # 알림(M4): 텔레그램 어댑터는 시험에서만 켠다(주소는 FakeTelegram MockWebServer, api.telegram.org는 부르지 않음)
+    notification:
+      telegram:
+        enabled: true
 logging:
   level:
     net.java21.data2flow: INFO
