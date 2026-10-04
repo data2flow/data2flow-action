@@ -22,7 +22,8 @@ import java.util.List;
 
 /**
  * {@code action.events} 소비(architecture.md §4.5). 이 서비스가 묶는 라우팅 키:
- * {@code device.command.ack}(EVT-ACT-06), {@code device.state.reported}(EVT-ACT-07), {@code device.connectivity.changed}(EVT-DEV-02),
+ * {@code device.command.ack}(EVT-ACT-06), {@code device.state.reported}(EVT-ACT-07: 시뮬레이터 상태 보고, pipeline LoRaWAN 업링크 신호 =
+ * 빈 {@code capabilities} → Class A 대기 다운링크 전송), {@code device.connectivity.changed}(EVT-DEV-02),
  * {@code device.changed}(EVT-DEV-01, 삭제 시 정리·캐시 무효화), {@code control.emergency.started|released}(EVT-ACT-03: 대기 중 자동 명령 취소).
  * 처리는 멱등이고(상태 전이·버전 비교) 커밋 뒤 ACK한다.
  */

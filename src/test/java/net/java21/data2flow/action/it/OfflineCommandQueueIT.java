@@ -27,6 +27,8 @@ class OfflineCommandQueueIT extends IntegrationTestSupport {
 
     private static final long VALVE = 31_001;   // Class A 밸브(Switch)
     private RestClient operator;
+    @org.springframework.beans.factory.annotation.Autowired
+    private io.micrometer.core.instrument.MeterRegistry meters;
 
     @BeforeEach
     void setUp() {
@@ -102,6 +104,80 @@ class OfflineCommandQueueIT extends IntegrationTestSupport {
 
         await().atMost(Duration.ofSeconds(20)).until(() -> status(id).equals("ACKED") || status(id).equals("APPLIED"));
         assertThat(SIM.commandsFor(VALVE)).isEqualTo(1);
+    }
+
+    /** pipeline이 LoRaWAN 업링크(ChirpStack event/up)마다 내는 업링크 신호: 기능 상태 없음, 버전 = fCnt, 실제 기기 */
+    private void uplinkSignal(long deviceId, long fCnt) {
+        publish(EventType.DEVICE_STATE_REPORTED, new DeviceStateReported(deviceId, fCnt, Map.of(), clock.instant(), false));
+    }
+
+    /** 처리한 업링크 신호 수(지표 data2flow_action_uplink_signals_total) */
+    private double signals() {
+        return meters.counter("data2flow_action_uplink_signals_total").count();
+    }
+
+    private java.time.Instant reportedAt(long deviceId) {
+        return jdbc.sql("SELECT reported_at FROM data2flow_action.device_shadows WHERE device_id = " + deviceId)
+                .query(java.sql.Timestamp.class).optional().map(java.sql.Timestamp::toInstant).orElse(null);
+    }
+
+    @Test
+    @DisplayName("[ACT-07.02][AT-ACT-07.5][TC-ACT-126] pipeline 업링크 신호(EVT-ACT-07 상태 없음): 마지막 업링크 시각만 갱신(상태·버전·EVT-ACT-02 없음), 다음 신호 직후 대기 다운링크를 보낸다")
+    void classAUplinkSignalFlushesDownlink() {
+        double start = signals();
+        publish(EventType.DEVICE_STATE_REPORTED, new DeviceStateReported(VALVE, 1, Map.of("Switch", Map.of("on", false)), clock.instant(), true));
+        await().atMost(Duration.ofSeconds(20)).until(() -> count(
+                "SELECT count(*) FROM data2flow_action.device_shadows WHERE device_id = " + VALVE + " AND reported_version = 1") == 1);
+        int changedBefore = events("device.state.changed").size();
+
+        clock.advanceBy(Duration.ofMinutes(4));
+        java.time.Instant firstUplink = clock.instant();
+        uplinkSignal(VALVE, 1042);
+        await().atMost(Duration.ofSeconds(20)).until(() -> firstUplink.equals(reportedAt(VALVE)));
+        assertThat(count("SELECT reported_version FROM data2flow_action.device_shadows WHERE device_id = " + VALVE)).isEqualTo(1);
+        assertThat(jdbc.sql("SELECT reported::text FROM data2flow_action.device_shadows WHERE device_id = " + VALVE).query(String.class).single())
+                .contains("\"on\": false");
+
+        clock.advanceBy(Duration.ofMinutes(1));
+        String id = submit(VALVE, "Switch", Map.of("on", true), "a-3");
+        Result detail = get(operator, "/internal/action/commands/" + id);
+        assertThat(detail.response().path("status").asString()).isEqualTo("QUEUED_FOR_DOWNLINK");
+        // 예상 시각 = 마지막 업링크(신호) + 보고 주기 10분
+        assertThat(detail.response().path("expectedDeliveryAt").asString()).isEqualTo(firstUplink.plus(Duration.ofMinutes(10)).toString());
+
+        clock.advanceBy(Duration.ofMinutes(9));
+        uplinkSignal(VALVE, 1043);
+        await().atMost(Duration.ofSeconds(20)).until(() -> SIM.commandsFor(VALVE) == 1);
+        await().atMost(Duration.ofSeconds(20)).until(() -> !status(id).equals("QUEUED_FOR_DOWNLINK") && !status(id).equals("REQUESTED"));
+        assertThat(jdbc.sql("SELECT string_agg(to_status, ',' ORDER BY id) FROM data2flow_action.command_events WHERE command_id = CAST(:id AS uuid)")
+                .param("id", id).query(String.class).single()).contains("QUEUED_FOR_DOWNLINK,REQUESTED,SENT");
+
+        // 같은 신호를 다시 받아도(최소 1회 전달) 다시 보내지 않고, 늦게 온 신호는 시각을 되돌리지 않는다
+        java.time.Instant secondUplink = clock.instant();
+        await().atMost(Duration.ofSeconds(20)).until(() -> signals() >= start + 2);
+        double handled = start + 2;
+        uplinkSignal(VALVE, 1043);
+        clock.advanceBy(Duration.ofSeconds(-30));
+        uplinkSignal(VALVE, 1041);
+        clock.advanceBy(Duration.ofSeconds(30));
+        await().atMost(Duration.ofSeconds(20)).until(() -> signals() >= handled + 2);
+        assertThat(reportedAt(VALVE)).isEqualTo(secondUplink);
+        long changedBySignals = events("device.state.changed").stream()
+                .filter(e -> e.path("payload").path("reportedVersion").asLong() > 1000).count();
+        assertThat(changedBySignals).isZero();
+        assertThat(events("device.state.changed").size()).isGreaterThanOrEqualTo(changedBefore);
+        assertThat(SIM.commandsFor(VALVE)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("[ACT-07.02][TC-ACT-128] 제어한 적 없는 LoRaWAN 센서의 업링크 신호는 상태 쌍을 만들지 않는다(센서마다 행·이벤트 없음)")
+    void uplinkSignalOfSensorIsNoOp() {
+        long sensor = 31_002;
+        double handled = signals();
+        uplinkSignal(sensor, 7);
+        await().atMost(Duration.ofSeconds(20)).until(() -> signals() >= handled + 1);
+        assertThat(count("SELECT count(*) FROM data2flow_action.device_shadows WHERE device_id = " + sensor)).isZero();
+        assertThat(events("device.state.changed")).isEmpty();
     }
 
     @Test

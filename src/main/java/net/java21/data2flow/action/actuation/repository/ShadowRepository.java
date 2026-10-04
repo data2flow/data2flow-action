@@ -59,6 +59,22 @@ public class ShadowRepository {
                 .update();
     }
 
+    /**
+     * 업링크 신호(EVT-ACT-07 상태 없음): 상태 쌍이 있는 기기만 마지막 보고 시각을 앞으로 당긴다. 행을 만들지 않고(센서마다 행이 생기지 않게),
+     * 더 늦은 시각만 반영해 다시 받은 신호·늦게 온 신호가 시각을 되돌리지 않는다(멱등).
+     *
+     * @return 바꾼 행 수(0 또는 1)
+     */
+    public int touchReportedAt(long organizationId, long deviceId, Instant at) {
+        if (at == null) {
+            return 0;
+        }
+        return jdbc.sql("""
+                        UPDATE data2flow_action.device_shadows SET reported_at = :at
+                         WHERE device_id = :device AND organization_id = :org AND (reported_at IS NULL OR reported_at < :at)""")
+                .param("at", Pg.ts(at)).param("device", deviceId).param("org", organizationId).update();
+    }
+
     /** 기기 삭제(EVT-DEV-01 DELETED): 상태 쌍·수동 우선·보호 상태를 지운다. 명령 이력은 보관 기간 동안 둔다 */
     public void deleteDevice(long organizationId, long deviceId) {
         for (String table : new String[]{"device_shadows", "manual_overrides", "protection_state"}) {

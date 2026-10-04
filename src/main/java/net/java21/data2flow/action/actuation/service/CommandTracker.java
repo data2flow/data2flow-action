@@ -150,10 +150,22 @@ public class CommandTracker implements DriverEventSink {
     @Override
     public void reported(long organizationId, DeviceStateReported report) {
         uplink(report.deviceId());
+        if (uplinkOnly(report)) {
+            // EVT-ACT-07 업링크 신호(pipeline: LoRaWAN ChirpStack event/up, ADR-049 남은 것 ②). 상태가 없으므로 상태 쌍·버전을 바꾸지 않고
+            // EVT-ACT-02도 내지 않는다. 상태 쌍이 있는 기기(제어한 적 있는 기기)만 마지막 업링크 시각을 앞으로 당긴다(Class A 예상 시각 기준).
+            tx.executeWithoutResult(status -> shadows.touchReportedAt(organizationId, report.deviceId(), report.reportedAt()));
+            meters.counter("data2flow_action_uplink_signals_total").increment();
+            return;
+        }
         List<UUID> applied = tx.execute(status -> applyReport(organizationId, report));
         if (applied != null) {
             applied.forEach(waiter::signal);
         }
+    }
+
+    /** 기능 상태 없이 업링크가 있었다는 것만 알리는 보고(EVT-ACT-07 {@code capabilities:{}}) */
+    static boolean uplinkOnly(DeviceStateReported report) {
+        return report.capabilities() == null || report.capabilities().isEmpty();
     }
 
     private List<UUID> applyReport(long organizationId, DeviceStateReported report) {
