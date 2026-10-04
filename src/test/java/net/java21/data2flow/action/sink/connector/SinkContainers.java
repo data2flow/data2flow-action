@@ -139,11 +139,20 @@ public final class SinkContainers {
         }
     }
 
+    /**
+     * 고정 호스트 포트. 임시 포트 범위(49152~)에서 고르면 같은 JVM이 나중에 여는 서버(시험 Tomcat 등)와 겹칠 수 있어서 20000~29999에서
+     * 비어 있는 포트를 고른다.
+     */
     private static int freePort() {
-        try (ServerSocket s = new ServerSocket(0)) {
-            return s.getLocalPort();
-        } catch (IOException e) {
-            throw new IllegalStateException(e);
+        java.util.Random random = new java.util.Random();
+        for (int i = 0; i < 200; i++) {
+            int port = 20000 + random.nextInt(10000);
+            try (ServerSocket socket = new ServerSocket(port)) {
+                return port;
+            } catch (IOException e) {
+                // 사용 중: 다른 포트
+            }
         }
+        throw new IllegalStateException("빈 포트를 찾지 못했습니다");
     }
 }
