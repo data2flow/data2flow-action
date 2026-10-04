@@ -96,3 +96,20 @@ data2flow:
       port: ${DATA2FLOW_ACTION_MQTT_PORT:1883}
       denied-hosts: iot-data.java21.net
       qos: 1
+    # LoRaWAN 다운링크(ACT-03.03). ⏸ 결정 대기: 공용 ChirpStack(s3.java21.net)에 다운링크를 넣지 않는다(CLAUDE.md §5).
+    # 기본 꺼짐이고, 켜도 공용 ChirpStack·공용 브로커 주소는 거부한다. 지금은 ChirpStack API 목(MockWebServer)으로만 시험한다
+    lorawan:
+      enabled: ${DATA2FLOW_ACTION_LORAWAN_ENABLED:false}
+      timeout: 5s
+    # 클라우드 벤더 드라이버(ACT-03.04). 키가 없어 기본 꺼짐("준비 중", ADR-040)
+    vendors:
+      lg-thinq:
+        enabled: ${DATA2FLOW_ACTION_LG_THINQ_ENABLED:false}
+        base-url: https://api-kic.lgthinq.com
+      smart-things:
+        enabled: ${DATA2FLOW_ACTION_SMARTTHINGS_ENABLED:false}
+        base-url: https://api.smartthings.com
+    # 제어 효과 확인(ACT-08.01)·가동 집계(ACT-08.02)
+    effect:
+      min-change: 0.2
+      zone: Asia/Seoul

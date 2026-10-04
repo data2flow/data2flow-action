@@ -54,7 +54,9 @@ import java.util.UUID;
  *   <li>{@code device.state.reported}(EVT-ACT-07): 버전이 클 때만 반영(BR-ACT-05) → 목표와 같아진 진행 중 명령 APPLIED →
  *       수동 명령이면 수동 우선 시작(BR-ACT-08) → 보호 상태·상태 구간 갱신 → EVT-ACT-02 {@code device.state.changed}.</li>
  *   <li>{@code device.connectivity.changed}(EVT-DEV-02): 연결 상태 기록, 복귀하면 대기 명령 전송과 desired 재적용(BR-ACT-06·13).</li>
- *   <li>기한: SENT → TIMEOUT(TIMEOUT_ACK), ACKED → TIMEOUT(TIMEOUT_APPLY), QUEUED → FAILED(EXPIRED).</li>
+ *   <li>기한: SENT → TIMEOUT(TIMEOUT_ACK), ACKED → TIMEOUT(TIMEOUT_APPLY), QUEUED·QUEUED_FOR_DOWNLINK → FAILED(EXPIRED).</li>
+ *   <li>상태 보고는 기기가 보낸 업링크이기도 하다: LoRaWAN Class A 다운링크 대기 명령을 바로 드라이버로 보낸다(ACT-07.02).</li>
+ *   <li>APPLIED되면 기대 효과 확인을 예약한다(ACT-08.01).</li>
  * </ul>
  */
 public class CommandTracker implements DriverEventSink {
@@ -74,11 +76,12 @@ public class CommandTracker implements DriverEventSink {
     private final ActionProperties properties;
     private final MeterRegistry meters;
     private final Clock clock;
+    private final ControlEffectService effects;
 
     public CommandTracker(CommandRepository commands, ShadowRepository shadows, DeviceStateRepository deviceState, CommandEvents events,
                           OutboxWriter outbox, ControlProfileService profiles, CommandDispatcher dispatcher, ControlFacade facade,
                           CommandWaiter waiter, PlatformTransactionManager txManager, ActionProperties properties, MeterRegistry meters,
-                          Clock clock) {
+                          Clock clock, ControlEffectService effects) {
         this.commands = commands;
         this.shadows = shadows;
         this.deviceState = deviceState;
@@ -92,6 +95,7 @@ public class CommandTracker implements DriverEventSink {
         this.properties = properties;
         this.meters = meters;
         this.clock = clock;
+        this.effects = effects;
     }
 
     // ───────────── ack ─────────────
@@ -145,6 +149,7 @@ public class CommandTracker implements DriverEventSink {
 
     @Override
     public void reported(long organizationId, DeviceStateReported report) {
+        uplink(report.deviceId());
         List<UUID> applied = tx.execute(status -> applyReport(organizationId, report));
         if (applied != null) {
             applied.forEach(waiter::signal);
@@ -170,7 +175,8 @@ public class CommandTracker implements DriverEventSink {
             if (!shadow.isApplied(c.capability(), c.args())) {
                 continue;
             }
-            events.transition(c, CommandEvents.to(c, CommandStatus.APPLIED, null, now, null), spaceId, null);
+            Command appliedCommand = events.transition(c, CommandEvents.to(c, CommandStatus.APPLIED, null, now, null), spaceId, null);
+            effects.schedule(appliedCommand, spaceId, now);
             applied.add(c.id());
             cause = c;
             if (c.priority() == CommandPriority.MANUAL && overrideMinutes > 0) {
@@ -208,6 +214,33 @@ public class CommandTracker implements DriverEventSink {
         if (state != null) {
             deviceState.saveProtection(organizationId, deviceId, state, now);
         }
+    }
+
+    // ───────────── Class A 업링크(ACT-07.02) ─────────────
+
+    /**
+     * 기기 업링크(상태 보고) 직후: Class A 다운링크 대기 명령을 다시 요청 상태로 두고 드라이버(ChirpStack 큐 등록)로 보낸다.
+     * 유효 시각이 지난 명령은 FAILED(EXPIRED).
+     */
+    public void uplink(long deviceId) {
+        List<UUID> dispatch = new ArrayList<>();
+        tx.executeWithoutResult(status -> {
+            Instant now = clock.instant();
+            List<Command> waiting = commands.lockDownlinks(deviceId);
+            if (waiting.isEmpty()) {
+                return;
+            }
+            Long spaceId = profiles.spaceOf(deviceId);
+            for (Command c : waiting) {
+                if (c.validUntil() != null && now.isAfter(c.validUntil())) {
+                    events.transition(c, CommandEvents.to(c, CommandStatus.FAILED, CommandStatusReasons.EXPIRED, now, null), spaceId, null);
+                    continue;
+                }
+                events.transition(c, CommandEvents.to(c, CommandStatus.REQUESTED, "UPLINK", now, now), spaceId, null);
+                dispatch.add(c.id());
+            }
+        });
+        dispatch.forEach(dispatcher::dispatch);
     }
 
     // ───────────── 연결 상태 ─────────────
@@ -281,7 +314,7 @@ public class CommandTracker implements DriverEventSink {
                     case DELAYED -> recheck.add(due.id());
                     case SENT -> expire(due.id(), CommandStatus.TIMEOUT, CommandStatusReasons.TIMEOUT_ACK, now);
                     case ACKED -> expire(due.id(), CommandStatus.TIMEOUT, CommandStatusReasons.TIMEOUT_APPLY, now);
-                    case QUEUED -> expire(due.id(), CommandStatus.FAILED, CommandStatusReasons.EXPIRED, now);
+                    case QUEUED, QUEUED_FOR_DOWNLINK -> expire(due.id(), CommandStatus.FAILED, CommandStatusReasons.EXPIRED, now);
                     default -> {
                     }
                 }

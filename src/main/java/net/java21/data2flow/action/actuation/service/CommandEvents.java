@@ -49,6 +49,28 @@ public class CommandEvents {
         return after;
     }
 
+    /** 전이 + 타임라인 detail(인터락 ID 등) */
+    public Command transition(Command before, Command after, Long spaceId, String message, Map<String, Object> detail) {
+        commands.save(after);
+        if (before.status() != after.status()) {
+            Map<String, Object> d = new java.util.LinkedHashMap<>(detail == null ? Map.of() : detail);
+            if (message != null) {
+                d.put("message", message);
+            }
+            long eventId = timeline.insert(after.id(), after.organizationId(), clock.instant(), before.status().name(),
+                    after.status().name(), after.statusReason(), d.isEmpty() ? null : d);
+            publish(after, spaceId, eventId, message);
+        }
+        return after;
+    }
+
+    /** EVT-ACT-08 진동 차단(BR-ACT-07 WARNING 알람의 원천, ADR-048). 차단 전이와 같은 트랜잭션 */
+    public void oscillationBlocked(Command c, Long spaceId, int flips, int windowSec) {
+        outbox.event(EventType.CONTROL_OSCILLATION_BLOCKED, c.organizationId(),
+                new net.java21.data2flow.contracts.message.event.OscillationBlocked(c.id(), c.deviceId(), spaceId, c.capability(), c.command(),
+                        flips, windowSec, c.source(), clock.instant()), "oscillation:" + c.id());
+    }
+
     /** 멱등 재요청: 처음 결과를 다시 알린다(BR-ACT-02, ACT-api §5.1) */
     public void republish(Command c, Long spaceId, String replayKey) {
         outbox.event(EventType.commandStatus(c.status()), c.organizationId(), payload(c, spaceId, null),

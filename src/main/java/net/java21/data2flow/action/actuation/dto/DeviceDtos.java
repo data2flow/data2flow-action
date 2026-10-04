@@ -34,7 +34,8 @@ public final class DeviceDtos {
     public record CapabilityView(String name, int version, Object attributes, Object commands, Map<String, Object> effectiveConstraints) {
     }
 
-    public record ManualOverrideView(String capability, Instant until, String setBy) {
+    /** 수동 우선(ACT-06.05): 남은 시간 {@code remainingSeconds}를 함께 준다(기기 카드 "n분 남음", TC-ACT-120) */
+    public record ManualOverrideView(String capability, Instant until, String setBy, long remainingSeconds) {
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -45,7 +46,9 @@ public final class DeviceDtos {
     }
 
     /** API-ACT-31 연결 확인 요청(core가 드라이버 정의를 넘긴다, 비밀값 없음) */
-    public record HealthcheckRequest(String type, Map<String, Object> config) {
+    /** 연결 확인 본문(API-ACT-31): core가 드라이버 종류·설정과 복호화한 비밀값(선택)을 넘긴다 */
+    public record HealthcheckRequest(String type, Map<String, Object> config,
+                                     Map<String, net.java21.data2flow.contracts.secret.Secret> secrets) {
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)

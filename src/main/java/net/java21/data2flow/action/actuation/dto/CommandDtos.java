@@ -66,6 +66,12 @@ public final class CommandDtos {
                     null, c.sentAt(), c.ackedAt(), c.appliedAt(), c.finishedAt(),
                     timeline == null ? null : timeline.stream().map(t -> new TimelineView(t.status(), t.at(), t.reason())).toList(), message);
         }
+
+        /** Class A 예상 전달 시각을 채운 사본(ACT-07.02) */
+        public CommandResponse withExpectedDeliveryAt(Instant at) {
+            return new CommandResponse(id, status, statusReason, deviceId, capability, command, args, priority, source, requestedAt,
+                    validUntil, executeAfter, at, sentAt, ackedAt, appliedAt, finishedAt, timeline, message);
+        }
     }
 
     /**

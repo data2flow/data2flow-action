@@ -65,10 +65,13 @@ public class CommandQueryService {
     private final TransactionTemplate tx;
     private final Clock clock;
     private final CapabilityCatalog catalog = CapabilityCatalog.standard();
+    private final EmergencyStopRegistry emergency;
 
     public CommandQueryService(CommandRepository commands, CommandEventRepository timeline, ShadowRepository shadows,
                                DeviceStateRepository deviceState, CommandEvents events, ControlProfileService profiles,
-                               DriverRegistry drivers, RoleChecker roleChecker, PlatformTransactionManager txManager, Clock clock) {
+                               DriverRegistry drivers, RoleChecker roleChecker, PlatformTransactionManager txManager, Clock clock,
+                               EmergencyStopRegistry emergency) {
+        this.emergency = emergency;
         this.commands = commands;
         this.timeline = timeline;
         this.shadows = shadows;
@@ -86,7 +89,9 @@ public class CommandQueryService {
         Command c = commands.findByIdAndOrganizationId(commandId, organizationId)
                 .orElseThrow(() -> new BusinessException(ActionErrorCode.COMMAND_NOT_FOUND));
         requireDevice(Permission.DEV_READ, organizationId, c.deviceId(), ActionErrorCode.COMMAND_NOT_FOUND);
-        return CommandResponse.of(c, timeline.findByCommand(organizationId, c.id()), null);
+        CommandResponse r = CommandResponse.of(c, timeline.findByCommand(organizationId, c.id()), null);
+        return c.status() == CommandStatus.QUEUED_FOR_DOWNLINK
+                ? r.withExpectedDeliveryAt(commands.findExpectedDelivery(organizationId, c.id()).orElse(null)) : r;
     }
 
     /** API-ACT-02 기기별 명령 이력(커서 목록, 최신순). 거부·차단된 명령도 나온다(ACT-04.03) */
@@ -174,14 +179,27 @@ public class CommandQueryService {
             }
         }
         DeviceDtos.ManualOverrideView override = deviceState.findManualOverrides(organizationId, deviceId, now).stream().findFirst()
-                .map(o -> new DeviceDtos.ManualOverrideView(o.capability(), o.until(), Long.toString(o.setBy()))).orElse(null);
+                .map(o -> new DeviceDtos.ManualOverrideView(o.capability(), o.until(), Long.toString(o.setBy()),
+                        Math.max(0, java.time.Duration.between(now, o.until()).getSeconds()))).orElse(null);
+        Object stop = null;
+        try {
+            stop = emergency.covering(organizationId, p.spacePathIds()).map(es -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("emergencyStopId", Long.toString(es.emergencyStopId()));
+                m.put("scope", es.scope());
+                m.put("since", es.startedAt());
+                return m;
+            }).orElse(null);
+        } catch (RuntimeException ignored) {
+            // 비상 정지 목록을 못 읽어도 제어 정보는 준다(배너는 SSE가 맡음)
+        }
         List<DeviceDtos.PendingView> pending = commands.findOpenByDevice(organizationId, deviceId).stream()
                 .map(c -> new DeviceDtos.PendingView(c.id().toString(), c.capability(), c.command(), c.status().name())).toList();
         DeviceDtos.DriverView driver = p.driver() == null ? null
                 : new DeviceDtos.DriverView(p.driver().driverId() == null ? null : p.driver().driverId().toString(), null, p.driver().type(),
                 drivers.find(p.driver().type()).isPresent() ? "OK" : "UNAVAILABLE");
         return new DeviceDtos.ControlResponse(p.controllable() && drivers.find(p.driver().type()).isPresent(), driver, caps,
-                shadowView(row.orElse(null)), override, nextAllowed == null ? null : new DeviceDtos.ProtectionView(nextAllowed), pending, null);
+                shadowView(row.orElse(null)), override, nextAllowed == null ? null : new DeviceDtos.ProtectionView(nextAllowed), pending, stop);
     }
 
     /** API-ACT-06 수동 우선 해제("자동으로 되돌리기") */
@@ -194,7 +212,7 @@ public class CommandQueryService {
     public DeviceDtos.HealthcheckResponse healthcheck(Long driverId, DeviceDtos.HealthcheckRequest request) {
         var driver = drivers.find(request == null ? null : request.type())
                 .orElseThrow(() -> new BusinessException(ActionErrorCode.DRIVER_NOT_FOUND));
-        DriverHealth h = driver.healthCheck(new DriverConfig(driverId, request.type(), request.config()));
+        DriverHealth h = driver.healthCheck(new DriverConfig(driverId, request.type(), request.config(), request.secrets()));
         if (!h.ok()) {
             throw new BusinessException(ActionErrorCode.DRIVER_HEALTHCHECK_FAILED, h.message() == null ? h.errorKind() : h.message());
         }

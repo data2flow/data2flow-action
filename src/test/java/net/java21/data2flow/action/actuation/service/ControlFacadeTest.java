@@ -69,6 +69,8 @@ class ControlFacadeTest {
     private final RoleChecker roleChecker = mock(RoleChecker.class);
     private final AuditRecorder audit = mock(AuditRecorder.class);
     private final CommandDispatcher dispatcher = mock(CommandDispatcher.class);
+    private final EmergencyStopRegistry emergency = mock(EmergencyStopRegistry.class);
+    private final InterlockService interlocks = mock(InterlockService.class);
     private ControlFacade facade;
     private ShadowRow shadow;
 
@@ -76,7 +78,9 @@ class ControlFacadeTest {
     void setUp() {
         facade = new ControlFacade(commands, shadows, deviceState, events, profiles, sandbox, roleChecker, audit, dispatcher,
                 mock(PlatformTransactionManager.class), new ActionProperties(null, null, null, null, null, null, null, null, null, null),
-                new SimpleMeterRegistry(), clock);
+                new SimpleMeterRegistry(), clock, emergency, interlocks);
+        given(interlocks.evaluate(any(), any(), anyString(), anyString(), any()))
+                .willReturn(net.java21.data2flow.action.actuation.domain.InterlockEvaluator.Decision.PASS);
         given(commands.findByKey(anyLong(), anyString())).willReturn(Optional.empty());
         given(commands.insert(any(), anyString())).willReturn(true);
         given(commands.findSentSince(anyLong(), anyString(), any(), any())).willReturn(List.of());
@@ -256,6 +260,104 @@ class ControlFacadeTest {
         assertThat(o.command().status()).isEqualTo(CommandStatus.BLOCKED);
         assertThat(o.command().statusReason()).isEqualTo("OSCILLATION");
         assertThat(o.rejection().code()).isEqualTo(ActionErrorCode.COMMAND_BLOCKED);
+        // EVT-ACT-08: 진동 차단 WARNING 알람의 원천(ADR-048)
+        then(events).should().oscillationBlocked(any(), eq(Fixtures.SPACE), eq(3), eq(60));
+    }
+
+    // ───────────── M4: 비상 정지·인터락·대기열·Class A ─────────────
+
+    @Test
+    @DisplayName("[ACT-06.03][AT-ACT-09.1][TC-ACT-109] 비상 정지 범위 안의 AUTO 명령 → SKIPPED(EMERGENCY_STOP), 드라이버 호출 없음")
+    void emergencyStopSkipsAutomatic() {
+        var stop = new net.java21.data2flow.action.actuation.domain.EmergencyStop(1, Fixtures.ORG,
+                net.java21.data2flow.contracts.message.event.EmergencyStopChanged.Scope.space(Fixtures.SPACE), "점검", clock.instant());
+        given(emergency.blocking(eq(Fixtures.ORG), eq(CommandPriority.AUTO), any())).willReturn(Optional.of(stop));
+
+        Outcome o = facade.submit(request(SourceType.FLOW, Map.of("mode", "cool"), null));
+
+        assertThat(o.command().status()).isEqualTo(CommandStatus.SKIPPED);
+        assertThat(o.command().statusReason()).isEqualTo("EMERGENCY_STOP");
+        then(dispatcher).shouldHaveNoInteractions();
+    }
+
+    @Test
+    @DisplayName("[ACT-06.02][AT-ACT-08.2][TC-ACT-101] 인터락 조건 참 → BLOCKED(INTERLOCK) + 인터락 message, 타임라인에 인터락 ID")
+    void interlockBlocks() {
+        var il = new net.java21.data2flow.action.actuation.domain.Interlock(5L, "창문", 31L, true, null, null, "창문이 열려 있습니다", null);
+        given(interlocks.evaluate(any(), any(), anyString(), anyString(), any())).willReturn(
+                new net.java21.data2flow.action.actuation.domain.InterlockEvaluator.Decision(il,
+                        net.java21.data2flow.action.actuation.domain.InterlockEvaluator.Reason.CONDITION_TRUE));
+        given(events.transition(any(), any(), any(), any(), any())).willAnswer(inv -> inv.getArgument(1));
+
+        Outcome o = facade.submit(request(SourceType.USER, Map.of("mode", "cool"), null));
+
+        assertThat(o.command().status()).isEqualTo(CommandStatus.BLOCKED);
+        assertThat(o.command().statusReason()).isEqualTo("INTERLOCK");
+        assertThat(o.message()).isEqualTo("창문이 열려 있습니다");
+        assertThat(o.rejection().code()).isEqualTo(ActionErrorCode.COMMAND_BLOCKED);
+        then(events).should().transition(any(), any(), eq(Fixtures.SPACE), eq("창문이 열려 있습니다"),
+                eq(Map.of("interlockId", "5", "interlockReason", "CONDITION_TRUE")));
+        then(dispatcher).shouldHaveNoInteractions();
+    }
+
+    @Test
+    @DisplayName("[ACT-07.01][AT-ACT-07.3][TC-ACT-124] 오프라인 기기에 같은 기능 명령 B → 대기 중 A SUPERSEDED, B QUEUED")
+    void supersedeQueued() {
+        shadow = new ShadowRow(Fixtures.AIRCON, Fixtures.ORG, DeviceShadow.EMPTY, null, null, "OFFLINE");
+        Command a = Fixtures.command(UUID.randomUUID(), "Thermostat", Map.of("targetTemperature", 25), CommandPriority.MANUAL,
+                CommandStatus.QUEUED, clock.instant());
+        given(commands.lockPending(anyLong(), eq("Thermostat"), any())).willReturn(List.of(a));
+
+        Outcome b = facade.submit(request(SourceType.USER, Map.of("targetTemperature", 24), null));
+
+        assertThat(b.command().status()).isEqualTo(CommandStatus.QUEUED);
+        then(events).should().transition(eq(a), org.mockito.ArgumentMatchers.argThat(c -> c.status() == CommandStatus.SUPERSEDED),
+                any(), any());
+    }
+
+    @ParameterizedTest(name = "대기 {0}개 → {1}")
+    @org.junit.jupiter.params.provider.CsvSource({"0, QUEUED", "9, QUEUED", "10, FAILED"})
+    @DisplayName("[ACT-07.01][TC-ACT-125] BR-ACT-13 규칙 표: 오프라인 대기열은 기기당 10개(넘으면 FAILED(QUEUE_FULL))")
+    void queueLimit(int alreadyQueued, CommandStatus expected) {
+        shadow = new ShadowRow(Fixtures.AIRCON, Fixtures.ORG, DeviceShadow.EMPTY, null, null, "OFFLINE");
+        given(commands.countQueued(Fixtures.AIRCON)).willReturn(alreadyQueued);
+
+        Outcome o = facade.submit(request(SourceType.USER, Map.of("targetTemperature", 24), null));
+
+        assertThat(o.command().status()).isEqualTo(expected);
+        if (expected == CommandStatus.FAILED) {
+            assertThat(o.command().statusReason()).isEqualTo(ControlFacade.QUEUE_FULL);
+        }
+    }
+
+    @Test
+    @DisplayName("[ACT-07.02][AT-ACT-07.5][TC-ACT-128] LoRaWAN Class A 기기 명령 → QUEUED_FOR_DOWNLINK, 예상 시각 = 마지막 업링크 + 보고 주기")
+    void classADownlinkQueued() {
+        ModelCapability classA = new ModelCapability(Map.of(), null, false, true);
+        ControlProfile p = new ControlProfile(Fixtures.AIRCON, Fixtures.ORG, Fixtures.SPACE, "밸브", "70b3d57ed0000001", false, "ACTIVE", 3L,
+                Map.of("Switch", classA), new DriverBinding(11L, "LORAWAN", Map.of(), 30, 60, null), Fixtures.settings()).withReportInterval(600);
+        given(profiles.find(Fixtures.AIRCON)).willReturn(Optional.of(p));
+        online(DeviceShadow.EMPTY.withReported(1, Map.of("Switch", Map.of("on", false)), clock.instant().minusSeconds(240)).orElseThrow());
+        CommandRequest req = new CommandRequest(Fixtures.ORG, Fixtures.AIRCON, "Switch", "set", Map.of("on", true), CommandSource.user(7),
+                null, "k-a", null, null, null, false, false);
+
+        Outcome o = facade.submit(req);
+
+        assertThat(o.command().status()).isEqualTo(CommandStatus.QUEUED_FOR_DOWNLINK);
+        assertThat(o.command().timeoutAt()).isEqualTo(o.command().validUntil());
+        then(commands).should().saveExpectedDelivery(o.command().id(), clock.instant().plusSeconds(360));
+        then(dispatcher).shouldHaveNoInteractions();
+    }
+
+    @Test
+    @DisplayName("[ACT-05.01][BR-ACT-24] 장면 출처 명령: 실행 출처가 사용자면 MANUAL, 플로우면 AUTO")
+    void sceneSourcePriority() {
+        CommandSource userScene = net.java21.data2flow.action.actuation.domain.SceneRules.sceneSource(CommandSource.user(7), "41");
+        Outcome o = facade.submit(new CommandRequest(Fixtures.ORG, Fixtures.AIRCON, "Thermostat", "set", Map.of("targetTemperature", 24),
+                userScene, null, "k-s", null, null, null, false, false));
+        assertThat(o.command().priority()).isEqualTo(CommandPriority.MANUAL);
+        assertThat(ControlFacade.priorityOf(net.java21.data2flow.action.actuation.domain.SceneRules.sceneSource(
+                CommandSource.flow("f", 1, "n", "m"), "42"))).isEqualTo(CommandPriority.AUTO);
     }
 
     @Test
@@ -272,7 +374,7 @@ class ControlFacadeTest {
     }
 
     @Test
-    @DisplayName("[ACT-02.01] 없는 기기·다른 조직 → 404 DEVICE_NOT_FOUND, 드라이버 없는 기기 → 409 DEVICE_NOT_CONTROLLABLE, 장면 출처 → 400(기록 없음)")
+    @DisplayName("[ACT-02.01] 없는 기기·다른 조직 → 404 DEVICE_NOT_FOUND, 드라이버 없는 기기 → 409 DEVICE_NOT_CONTROLLABLE, 장면 실행 ID 없는 장면 출처 → 400(기록 없음)")
     void notControllable() {
         given(profiles.find(99L)).willReturn(Optional.empty());
         CommandRequest missing = new CommandRequest(Fixtures.ORG, 99, "Switch", "set", Map.of("on", true), CommandSource.user(7), null, "a",
@@ -287,7 +389,7 @@ class ControlFacadeTest {
                 .extracting("errorCode").isEqualTo(ActionErrorCode.DEVICE_NOT_CONTROLLABLE);
 
         CommandRequest scene = new CommandRequest(Fixtures.ORG, Fixtures.AIRCON, "Switch", "set", Map.of("on", true),
-                new CommandSource(SourceType.SCENE, null, null, null, null, null, "r-1", null, null, null, null), null, "b", null, null,
+                new CommandSource(SourceType.SCENE, null, null, null, null, null, null, null, null, null, null), null, "b", null, null,
                 null, false, false);
         assertThatThrownBy(() -> facade.submit(scene)).isInstanceOf(BusinessException.class);
         then(commands).should(never()).insert(any(), anyString());

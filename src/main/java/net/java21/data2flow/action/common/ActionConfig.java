@@ -20,6 +20,18 @@ import net.java21.data2flow.action.actuation.service.CommandWaiter;
 import net.java21.data2flow.action.actuation.service.ControlFacade;
 import net.java21.data2flow.action.actuation.service.ControlProfileService;
 import net.java21.data2flow.action.actuation.service.SandboxRegistry;
+import net.java21.data2flow.action.actuation.service.BulkControlService;
+import net.java21.data2flow.action.actuation.service.ControlEffectService;
+import net.java21.data2flow.action.actuation.service.DriverHealthService;
+import net.java21.data2flow.action.actuation.service.EmergencyStopHandler;
+import net.java21.data2flow.action.actuation.service.EmergencyStopRegistry;
+import net.java21.data2flow.action.actuation.service.InterlockService;
+import net.java21.data2flow.action.actuation.service.RuntimeStatsService;
+import net.java21.data2flow.action.actuation.service.SceneService;
+import net.java21.data2flow.action.actuation.repository.DriverCallRepository;
+import net.java21.data2flow.action.actuation.repository.EffectCheckRepository;
+import net.java21.data2flow.action.actuation.repository.RuntimeStatRepository;
+import net.java21.data2flow.action.actuation.repository.SceneBulkRepository;
 import net.java21.data2flow.action.outbox.CoreCallbackDispatcher;
 import net.java21.data2flow.action.outbox.OutboxDispatcher;
 import net.java21.data2flow.action.outbox.OutboxRelay;
@@ -112,6 +124,38 @@ public class ActionConfig {
         return new MqttDriver(mqtt, clientId, new LazySink(tracker), clock);
     }
 
+    /**
+     * LoRaWAN(ChirpStack) 드라이버: {@code data2flow.action.lorawan.enabled=true}일 때만(기본 꺼짐, ⏸ ACT-03.03 결정 대기). 호출할 때마다
+     * 공용 ChirpStack·브로커 주소를 거부한다(CLAUDE.md §5).
+     */
+    @Bean
+    @ConditionalOnProperty(prefix = "data2flow.action.lorawan", name = "enabled", havingValue = "true")
+    net.java21.data2flow.action.actuation.driver.lorawan.LoRaWanDriver loRaWanDriver(ActionProperties properties,
+                                                                                    ObjectProvider<CommandTracker> tracker, Clock clock) {
+        return new net.java21.data2flow.action.actuation.driver.lorawan.LoRaWanDriver(properties.lorawan().timeout(),
+                properties.lorawan().deniedHosts(), new LazySink(tracker), clock);
+    }
+
+    /** LG ThinQ(ACT-03.04): 키 발급 전이라 기본 꺼짐("준비 중", ADR-040) */
+    @Bean
+    @ConditionalOnProperty(prefix = "data2flow.action.vendors.lg-thinq", name = "enabled", havingValue = "true")
+    net.java21.data2flow.action.actuation.driver.vendor.LgThinqDriver lgThinqDriver(ActionProperties properties,
+                                                                                   ObjectProvider<CommandTracker> tracker, Clock clock) {
+        ActionProperties.Vendor v = properties.vendors().lgThinq();
+        return new net.java21.data2flow.action.actuation.driver.vendor.LgThinqDriver(v.baseUrl(), v.timeout(), new LazySink(tracker), clock);
+    }
+
+    /** SmartThings(ACT-03.04): 키 발급 전이라 기본 꺼짐("준비 중", ADR-040) */
+    @Bean
+    @ConditionalOnProperty(prefix = "data2flow.action.vendors.smart-things", name = "enabled", havingValue = "true")
+    net.java21.data2flow.action.actuation.driver.vendor.SmartThingsDriver smartThingsDriver(ActionProperties properties,
+                                                                                           ObjectProvider<CommandTracker> tracker,
+                                                                                           Clock clock) {
+        ActionProperties.Vendor v = properties.vendors().smartThings();
+        return new net.java21.data2flow.action.actuation.driver.vendor.SmartThingsDriver(v.baseUrl(), v.timeout(), new LazySink(tracker),
+                clock);
+    }
+
     @Bean
     DriverRegistry driverRegistry(List<DeviceDriver> drivers) {
         return new DriverRegistry(drivers);
@@ -157,42 +201,100 @@ public class ActionConfig {
     }
 
     @Bean
+    DriverHealthService driverHealthService(DriverCallRepository calls, OutboxWriter outbox, PlatformTransactionManager tx,
+                                            MeterRegistry meters, Clock clock) {
+        return new DriverHealthService(calls, outbox, tx, meters, clock);
+    }
+
+    @Bean
     CommandDispatcher commandDispatcher(CommandRepository commands, ShadowRepository shadows, CommandEvents events,
                                         ControlProfileService profiles, DriverRegistry drivers, CommandWaiter waiter,
-                                        PlatformTransactionManager tx, ActionProperties properties, MeterRegistry meters, Clock clock) {
-        return new CommandDispatcher(commands, shadows, events, profiles, drivers, waiter, tx, properties, meters, clock);
+                                        PlatformTransactionManager tx, ActionProperties properties, MeterRegistry meters, Clock clock,
+                                        DriverHealthService health) {
+        return new CommandDispatcher(commands, shadows, events, profiles, drivers, waiter, tx, properties, meters, clock, health);
+    }
+
+    @Bean
+    EmergencyStopRegistry emergencyStopRegistry(CoreClient core, Clock clock, ActionProperties properties) {
+        return new EmergencyStopRegistry(core, clock, properties.profileTtl());
+    }
+
+    @Bean
+    InterlockService interlockService(CoreClient core, ShadowRepository shadows, ControlProfileService profiles, Clock clock,
+                                      ActionProperties properties) {
+        return new InterlockService(core, shadows, profiles, clock, properties.profileTtl());
     }
 
     @Bean
     ControlFacade controlFacade(CommandRepository commands, ShadowRepository shadows, DeviceStateRepository deviceState,
                                 CommandEvents events, ControlProfileService profiles, SandboxRegistry sandbox, RoleChecker roleChecker,
                                 AuditRecorder audit, CommandDispatcher dispatcher, PlatformTransactionManager tx,
-                                ActionProperties properties, MeterRegistry meters, Clock clock) {
+                                ActionProperties properties, MeterRegistry meters, Clock clock, EmergencyStopRegistry emergency,
+                                InterlockService interlocks) {
         return new ControlFacade(commands, shadows, deviceState, events, profiles, sandbox, roleChecker, audit, dispatcher, tx, properties,
-                meters, clock);
+                meters, clock, emergency, interlocks);
+    }
+
+    @Bean
+    ControlEffectService controlEffectService(EffectCheckRepository checks, RuntimeStatRepository runtime, CoreClient core,
+                                              OutboxWriter outbox, PlatformTransactionManager tx, ActionProperties properties,
+                                              MeterRegistry meters, Clock clock) {
+        return new ControlEffectService(checks, runtime, core, outbox, tx, properties, meters, clock);
     }
 
     @Bean
     CommandTracker commandTracker(CommandRepository commands, ShadowRepository shadows, DeviceStateRepository deviceState,
                                   CommandEvents events, OutboxWriter outbox, ControlProfileService profiles, CommandDispatcher dispatcher,
                                   ControlFacade facade, CommandWaiter waiter, PlatformTransactionManager tx, ActionProperties properties,
-                                  MeterRegistry meters, Clock clock) {
+                                  MeterRegistry meters, Clock clock, ControlEffectService effects) {
         return new CommandTracker(commands, shadows, deviceState, events, outbox, profiles, dispatcher, facade, waiter, tx, properties,
-                meters, clock);
+                meters, clock, effects);
+    }
+
+    @Bean
+    EmergencyStopHandler emergencyStopHandler(EmergencyStopRegistry registry, CommandRepository commands, CommandEvents events,
+                                              ControlProfileService profiles, PlatformTransactionManager tx, Clock clock) {
+        return new EmergencyStopHandler(registry, commands, events, profiles, tx, clock);
+    }
+
+    @Bean
+    RuntimeStatsService runtimeStatsService(RuntimeStatRepository runtime, EffectCheckRepository effects, ControlProfileService profiles,
+                                            ActionProperties properties, Clock clock) {
+        return new RuntimeStatsService(runtime, effects, profiles, properties, clock);
+    }
+
+    /** 일괄 제어 제출(가상 스레드, ACT-02.06) */
+    @Bean(destroyMethod = "close")
+    java.util.concurrent.ExecutorService actionBackgroundExecutor() {
+        return java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+    }
+
+    @Bean
+    BulkControlService bulkControlService(CoreClient core, ControlProfileService profiles, ShadowRepository shadows,
+                                          SceneBulkRepository repository, CommandRepository commands, ControlFacade facade,
+                                          RoleChecker roleChecker, java.util.concurrent.ExecutorService actionBackgroundExecutor, Clock clock) {
+        return new BulkControlService(core, profiles, shadows, repository, commands, facade, roleChecker, actionBackgroundExecutor, clock);
+    }
+
+    @Bean
+    SceneService sceneService(CoreClient core, ControlProfileService profiles, ShadowRepository shadows, InterlockService interlocks,
+                              SceneBulkRepository repository, CommandRepository commands, ControlFacade facade, Clock clock) {
+        return new SceneService(core, profiles, shadows, interlocks, repository, commands, facade, clock);
     }
 
     @Bean
     CommandQueryService commandQueryService(CommandRepository commands, CommandEventRepository timeline, ShadowRepository shadows,
                                             DeviceStateRepository deviceState, CommandEvents events, ControlProfileService profiles,
-                                            DriverRegistry drivers, RoleChecker roleChecker, PlatformTransactionManager tx, Clock clock) {
-        return new CommandQueryService(commands, timeline, shadows, deviceState, events, profiles, drivers, roleChecker, tx, clock);
+                                            DriverRegistry drivers, RoleChecker roleChecker, PlatformTransactionManager tx, Clock clock,
+                                            EmergencyStopRegistry emergency) {
+        return new CommandQueryService(commands, timeline, shadows, deviceState, events, profiles, drivers, roleChecker, tx, clock, emergency);
     }
 
     @Bean
     ActionRequestHandler actionRequestHandler(ControlFacade facade, CommandRepository commands, ExecutionRepository executions,
                                               CommandEvents events, ControlProfileService profiles, CoreClient core,
-                                              PlatformTransactionManager tx, Clock clock) {
-        return new ActionRequestHandler(facade, commands, executions, events, profiles, core, tx, clock);
+                                              PlatformTransactionManager tx, Clock clock, SceneService scenes) {
+        return new ActionRequestHandler(facade, commands, executions, events, profiles, core, tx, clock, scenes);
     }
 
     // ───────────── 아웃박스(ADR-020) ─────────────

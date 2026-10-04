@@ -1,0 +1,1 @@
+{"model": "LoRaWAN 에어컨 제어기", "capability": "Thermostat", "args": {"mode": "cool", "targetTemperature": 24}, "fPort": 11, "payloadHex": "020130"}

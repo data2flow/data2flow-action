@@ -39,6 +39,7 @@ import java.util.UUID;
  *       ack가 호출 응답보다 먼저 와서 이미 ACKED·APPLIED면 되돌리지 않는다.</li>
  * </ol>
  * 호출 중 파드가 죽으면 기한 작업이 ack 기한 뒤 다시 부른다(최소 1회 + 드라이버 멱등).
+ * 서킷 브레이커(ACT-07.03, BR-ACT-14): 드라이버 서킷이 열려 있으면 부르지 않고 FAILED(DRIVER_UNAVAILABLE), 호출마다 지표를 남긴다(ACT-03.06).
  */
 public class CommandDispatcher {
 
@@ -54,10 +55,11 @@ public class CommandDispatcher {
     private final ActionProperties properties;
     private final MeterRegistry meters;
     private final Clock clock;
+    private final DriverHealthService health;
 
     public CommandDispatcher(CommandRepository commands, ShadowRepository shadows, CommandEvents events, ControlProfileService profiles,
                              DriverRegistry drivers, CommandWaiter waiter, PlatformTransactionManager txManager,
-                             ActionProperties properties, MeterRegistry meters, Clock clock) {
+                             ActionProperties properties, MeterRegistry meters, Clock clock, DriverHealthService health) {
         this.commands = commands;
         this.shadows = shadows;
         this.events = events;
@@ -68,6 +70,7 @@ public class CommandDispatcher {
         this.properties = properties;
         this.meters = meters;
         this.clock = clock;
+        this.health = health;
     }
 
     private record Call(Command command, DeviceDriver driver, DriverCommand driverCommand, DriverBinding binding, Long spaceId) {
@@ -79,7 +82,18 @@ public class CommandDispatcher {
         if (call == null) {
             return;
         }
+        long organizationId = call.command().organizationId();
+        net.java21.data2flow.action.actuation.domain.DriverCircuitBreaker.Admission admission = health.admit(organizationId, call.binding());
+        if (admission == net.java21.data2flow.action.actuation.domain.DriverCircuitBreaker.Admission.REJECT) {
+            meters.counter("data2flow_action_driver_circuit_rejected_total", "type", call.driver().type()).increment();
+            tx.executeWithoutResult(status -> commands.lock(commandId).filter(c -> c.status() == CommandStatus.REQUESTED).ifPresent(c ->
+                    events.transition(c, CommandEvents.to(c, CommandStatus.FAILED, CommandStatusReasons.DRIVER_UNAVAILABLE, clock.instant(), null),
+                            call.spaceId(), "드라이버 서킷이 열려 있습니다")));
+            waiter.signal(commandId);
+            return;
+        }
         Timer.Sample sample = Timer.start(meters);
+        long started = System.nanoTime();
         DriverResult result;
         try {
             result = call.driver().execute(call.driverCommand());
@@ -88,7 +102,13 @@ public class CommandDispatcher {
             log.warn("드라이버 예외 type={} command={}: {}", call.driver().type(), commandId, e.toString());
             result = DriverResult.failed(CommandStatusReasons.DRIVER_ERROR, true, e.getMessage());
         }
+        long latencyMs = (System.nanoTime() - started) / 1_000_000;
         sample.stop(meters.timer("data2flow_action_driver_calls", "type", call.driver().type(), "result", result.status().name()));
+        // 드라이버 장애(일시 실패)만 서킷 실패로 센다. 장비가 명령을 거부한 것(4xx)은 드라이버 장애가 아니다
+        boolean driverFailure = result.status() == DriverResult.Status.FAILED && result.retryable();
+        Object message = result.detail().get("message");
+        health.record(organizationId, call.binding(), commandId, !driverFailure, latencyMs,
+                driverFailure ? (message == null ? result.reason() : message.toString()) : null);
         DriverResult r = result;
         tx.executeWithoutResult(status -> complete(call, r));
         waiter.signal(commandId);
@@ -122,7 +142,7 @@ public class CommandDispatcher {
                 .map(row -> row.shadow().desiredVersion()).orElse(0L);
         Duration ack = ackTimeout(binding, driver.get());
         commands.save(CommandEvents.attempted(c, now.plus(ack)));
-        DriverConfig config = new DriverConfig(binding.driverId(), binding.type(), binding.config());
+        DriverConfig config = new DriverConfig(binding.driverId(), binding.type(), binding.config(), binding.secrets());
         DriverDevice device = new DriverDevice(c.deviceId(), c.organizationId(), p.externalId(), p.virtual(), config);
         DriverCommand dc = new DriverCommand(c.id(), device, c.capability(), c.command(), c.args(), c.validUntil(), c.idempotencyKey(),
                 desiredVersion);

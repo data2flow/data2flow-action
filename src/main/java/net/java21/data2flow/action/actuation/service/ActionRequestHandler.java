@@ -30,6 +30,7 @@ import java.util.List;
  *       기기별 키는 요청 키 + 기기 ID라 다시 처리해도 기기마다 한 번만 실행된다.</li>
  *   <li>{@code validUntil}이 지난 요청은 실행하지 않고 FAILED(EXPIRED)로 남긴다.</li>
  *   <li>형식 오류·모르는 종류·출처 누락(승인 없는 AI 등, BR-ACT-15)은 {@link MessageFormatException}: 재시도 없이 DLQ.</li>
+ *   <li>kind=SCENE({@code payload.sceneId}, ACT-05.01)은 장면 실행으로 넘긴다. 우선순위는 요청 출처(플로우 = AUTO, 예약 = SCHEDULE, AI = AI)를 따른다.</li>
  * </ul>
  * 처리(DB 커밋)가 끝난 뒤에 호출 쪽이 큐에 ACK한다.
  */
@@ -46,9 +47,11 @@ public class ActionRequestHandler {
     private final CoreClient core;
     private final TransactionTemplate tx;
     private final Clock clock;
+    private final SceneService scenes;
 
     public ActionRequestHandler(ControlFacade facade, CommandRepository commands, ExecutionRepository executions, CommandEvents events,
-                                ControlProfileService profiles, CoreClient core, PlatformTransactionManager txManager, Clock clock) {
+                                ControlProfileService profiles, CoreClient core, PlatformTransactionManager txManager, Clock clock,
+                                SceneService scenes) {
         this.facade = facade;
         this.commands = commands;
         this.executions = executions;
@@ -57,12 +60,16 @@ public class ActionRequestHandler {
         this.core = core;
         this.tx = new TransactionTemplate(txManager);
         this.clock = clock;
+        this.scenes = scenes;
     }
 
     /** 처리한 명령들(재요청이면 처음 명령들) */
     public List<Command> handle(ActionRequest req) {
+        if (req.kind() == ActionKind.SCENE) {
+            handleScene(req);
+            return List.of();
+        }
         if (req.kind() != ActionKind.COMMAND) {
-            // SCENE(장면 실행)은 ACT-05(M4). 지금은 처리할 수 없으므로 DLQ로 보내 사람이 확인한다
             throw new MessageFormatException("이 버전의 action이 처리하지 않는 행동 종류입니다: " + req.kind());
         }
         CommandPayload payload = req.commandPayload();
@@ -96,6 +103,38 @@ public class ActionRequestHandler {
         tx.executeWithoutResult(s -> executions.recordExecuted(req.organizationId(), requestKey, ActionKind.COMMAND.name(), ref, status,
                 clock.instant()));
         return results;
+    }
+
+    /** 장면 실행 요청(kind=SCENE). 같은 멱등 키는 한 번만 실행한다 */
+    private void handleScene(ActionRequest req) {
+        long sceneId = req.payload().path("sceneId").asLong(0);
+        if (sceneId < 1) {
+            throw new MessageFormatException("SCENE payload에 sceneId가 없습니다");
+        }
+        if (req.source() == null || req.source().type() == net.java21.data2flow.contracts.command.SourceType.SCENE
+                || req.source().type() == net.java21.data2flow.contracts.command.SourceType.UNKNOWN) {
+            throw new MessageFormatException("장면 실행 출처가 올바르지 않습니다: " + req.source());
+        }
+        String requestKey = IdempotencyKeys.action(req.source().type(), req.idempotencyKey());
+        tx.executeWithoutResult(s -> executions.markProcessed(CONSUMER, req.messageId().toString(), clock.instant()));
+        if (executions.findExecuted(req.organizationId(), requestKey).isPresent()) {
+            return;
+        }
+        String ref;
+        String status;
+        try {
+            ref = Long.toString(scenes.run(req.organizationId(), sceneId, req.source(), requestKey));
+            status = "RUNNING";
+        } catch (BusinessException e) {
+            // 없는 장면·항목 초과: 다시 보내도 결과가 같다
+            log.warn("장면을 실행할 수 없습니다 scene={} code={}", sceneId, e.getErrorCode().code());
+            ref = null;
+            status = e.getErrorCode().code();
+        }
+        String r = ref;
+        String st = status;
+        tx.executeWithoutResult(s -> executions.recordExecuted(req.organizationId(), requestKey, ActionKind.SCENE.name(), r,
+                st.length() > 24 ? st.substring(0, 24) : st, clock.instant()));
     }
 
     private List<Command> replay(ActionRequest req, String requestKey, CommandPayload payload) {

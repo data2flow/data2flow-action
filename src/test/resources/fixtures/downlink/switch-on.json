@@ -1,0 +1,1 @@
+{"model": "LoRaWAN 릴레이 스위치", "capability": "Switch", "args": {"on": true}, "fPort": 10, "payloadHex": "0101"}

@@ -42,6 +42,38 @@ class ConfigChangeListenerTest {
     private final CoreClient core = mock(CoreClient.class);
     private ControlProfileService profiles;
     private ConfigChangeListener listener;
+    private net.java21.data2flow.action.actuation.service.InterlockService interlocks;
+    private net.java21.data2flow.action.actuation.service.EmergencyStopRegistry emergency;
+
+    @Test
+    @DisplayName("[ACT-06.02] INTERLOCK 변경은 인터락 캐시를 지우고, DEVICE 변경은 그 기기 인터락만 다시 읽는다")
+    void interlockInvalidation() {
+        when(core.interlocks(AIRCON)).thenReturn(java.util.List.of());
+        when(core.interlocks(LAMP)).thenReturn(java.util.List.of());
+        interlocks.interlocks(AIRCON);
+        interlocks.interlocks(LAMP);
+        listener.apply(new ConfigChangedMessage(1, UUID.randomUUID(), EntityType.DEVICE, "15", 2, Op.UPSERT, "1", clock.instant()));
+        interlocks.interlocks(AIRCON);
+        interlocks.interlocks(LAMP);
+        verify(core, times(2)).interlocks(AIRCON);
+        verify(core, times(1)).interlocks(LAMP);
+        listener.apply(new ConfigChangedMessage(1, UUID.randomUUID(), EntityType.INTERLOCK, "3", 2, Op.UPSERT, "1", clock.instant()));
+        interlocks.interlocks(LAMP);
+        verify(core, times(2)).interlocks(LAMP);
+    }
+
+    @Test
+    @DisplayName("[ACT-06.03] EMERGENCY_STOP 변경은 파드마다 비상 정지 목록을 다시 읽는다(1초 안 반영, BR-ACT-12)")
+    void emergencyReload() {
+        when(core.activeEmergencyStops()).thenReturn(java.util.List.of());
+        emergency.current();
+        listener.apply(new ConfigChangedMessage(1, UUID.randomUUID(), EntityType.EMERGENCY_STOP, "1", 1, Op.UPSERT, "1", clock.instant()));
+        verify(core, times(2)).activeEmergencyStops();
+        when(core.activeEmergencyStops()).thenThrow(new IllegalStateException("core down"));
+        listener.apply(new ConfigChangedMessage(1, UUID.randomUUID(), EntityType.EMERGENCY_STOP, "1", 1, Op.UPSERT, "1", clock.instant()));
+        // 다시 읽지 못하면 이전 목록을 쓴다
+        org.assertj.core.api.Assertions.assertThat(emergency.current()).isEmpty();
+    }
 
     @BeforeEach
     void setUp() {
@@ -51,7 +83,10 @@ class ConfigChangeListenerTest {
         when(core.controlProfile(LAMP)).thenReturn(Optional.of(lamp));
         profiles = new ControlProfileService(core, clock,
                 new ActionProperties(null, null, null, null, null, null, null, null, null, null));
-        listener = new ConfigChangeListener(profiles, mock(SandboxRegistry.class));
+        interlocks = new net.java21.data2flow.action.actuation.service.InterlockService(core,
+                mock(net.java21.data2flow.action.actuation.repository.ShadowRepository.class), profiles, clock, java.time.Duration.ofSeconds(30));
+        emergency = new net.java21.data2flow.action.actuation.service.EmergencyStopRegistry(core, clock, java.time.Duration.ofSeconds(30));
+        listener = new ConfigChangeListener(profiles, mock(SandboxRegistry.class), interlocks, emergency);
         profiles.find(AIRCON);
         profiles.find(LAMP);
         clearInvocations(core);

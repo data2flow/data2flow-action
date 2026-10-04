@@ -56,8 +56,9 @@ import java.util.UUID;
  * 제어 창구(Control Facade, ACT-02.01, ADR-009). 화면(core 내부 API)·플로우(action.commands 큐)·재연결 재적용 등 모든 명령이 여기를
  * 지나고, 드라이버는 여기서만 부른다(드라이버를 직접 부르는 경로는 없다).
  *
- * <p>검사 순서(BR-ACT-01): 멱등(BR-ACT-02) → 권한 → 샌드박스 → 기능 스키마 → 모델 제약 → 조직 절대 한계 → [비상 정지: M4] → 수동 우선 →
- * [인터락: M4] → 변경 없음(BR-ACT-04) → 보호 → 진동·최소 간격 → 오프라인 판단 → 드라이버 호출. 앞 단계에서 걸리면 뒤 단계는 보지 않고,
+ * <p>검사 순서(BR-ACT-01): 멱등(BR-ACT-02) → 권한 → 샌드박스 → 기능 스키마 → 모델 제약 → 조직 절대 한계 → 비상 정지(BR-ACT-12) → 수동 우선 →
+ * 인터락(BR-ACT-11) → 변경 없음(BR-ACT-04) → 보호 → 진동·최소 간격 → Class A 다운링크 대기(ACT-07.02)·오프라인 판단(기기당 10개, BR-ACT-13)
+ * → 드라이버 호출. 비상 정지 목록과 인터락 조건 값은 HTTP로 읽으므로 트랜잭션 전에 미리 판정해 둔다. 앞 단계에서 걸리면 뒤 단계는 보지 않고,
  * 거부된 명령도 기록한다(ACT-04.03). 상태가 바뀔 때마다 타임라인과 EVT-ACT-01을 같은 트랜잭션에 남기고, 제어 명령 감사(IAM-06.01
  * {@code DEVICE_COMMAND})도 같은 트랜잭션의 아웃박스로 보낸다.
  */
@@ -80,11 +81,17 @@ public class ControlFacade {
     private final MeterRegistry meters;
     private final Clock clock;
     private final CapabilityCatalog catalog = CapabilityCatalog.standard();
+    private final EmergencyStopRegistry emergency;
+    private final InterlockService interlocks;
+    /** 오프라인 대기열 기기당 최대(BR-ACT-13) */
+    public static final int MAX_QUEUED_PER_DEVICE = 10;
+    /** 대기열이 가득 찼을 때 사유 */
+    public static final String QUEUE_FULL = "QUEUE_FULL";
 
     public ControlFacade(CommandRepository commands, ShadowRepository shadows, DeviceStateRepository deviceState, CommandEvents events,
                          ControlProfileService profiles, SandboxRegistry sandbox, RoleChecker roleChecker, AuditRecorder audit,
                          CommandDispatcher dispatcher, PlatformTransactionManager txManager, ActionProperties properties,
-                         MeterRegistry meters, Clock clock) {
+                         MeterRegistry meters, Clock clock, EmergencyStopRegistry emergency, InterlockService interlocks) {
         this.commands = commands;
         this.shadows = shadows;
         this.deviceState = deviceState;
@@ -98,6 +105,21 @@ public class ControlFacade {
         this.properties = properties;
         this.meters = meters;
         this.clock = clock;
+        this.emergency = emergency;
+        this.interlocks = interlocks;
+    }
+
+    /** 트랜잭션 전에 미리 판정한 것(HTTP): 비상 정지·인터락 */
+    private record PreChecks(Optional<net.java21.data2flow.action.actuation.domain.EmergencyStop> stop,
+                             net.java21.data2flow.action.actuation.domain.InterlockEvaluator.Decision interlock) {
+    }
+
+    private PreChecks preChecks(ControlProfile profile, CommandPriority priority, String capability, String command, Map<String, Object> args) {
+        var stop = emergency.blocking(profile.organizationId(), priority, profile.spacePathIds());
+        var il = stop.isPresent() || profile.capability(capability).isEmpty()
+                ? net.java21.data2flow.action.actuation.domain.InterlockEvaluator.Decision.PASS
+                : interlocks.evaluate(profile, priority, capability, command, args);
+        return new PreChecks(stop, il);
     }
 
     /**
@@ -119,7 +141,8 @@ public class ControlFacade {
         if (!profile.controllable()) {
             throw new BusinessException(ActionErrorCode.DEVICE_NOT_CONTROLLABLE);
         }
-        CommandPriority priority = CommandPriority.forSource(source.type());
+        CommandPriority priority = priorityOf(source);
+        PreChecks pre = preChecks(profile, priority, req.capability(), req.command(), req.args());
         Instant now = clock.instant();
         Command requested = new Command(UUID.randomUUID(), req.organizationId(), req.idempotencyKey(), req.deviceId(), req.capability(),
                 req.command(), req.args(), priority, source, CommandStatus.REQUESTED, null, validUntil(req, profile.settings(), now),
@@ -133,7 +156,7 @@ public class ControlFacade {
                 detail.put("requestedPriorityIgnored", req.requestedPriority().name());   // BR-ACT-24
             }
             events.created(requested, profile.spaceId(), detail);
-            Decided d = decide(requested, req, profile, now);
+            Decided d = decide(requested, req, profile, now, pre);
             audit(d.command(), profile, req.requestedPriority());
             return d;
         });
@@ -154,6 +177,14 @@ public class ControlFacade {
      * 보호 지연(DELAYED) 명령의 실행 시각이 되었다: 수동 우선·보호·오프라인을 다시 보고 보낸다(BR-ACT-10 "허용 시각까지 미룬 뒤 다시 검사").
      */
     public void recheckDelayed(UUID commandId) {
+        Optional<Command> peek = commands.lock(commandId).filter(c -> c.status() == CommandStatus.DELAYED);
+        if (peek.isEmpty()) {
+            return;
+        }
+        Optional<ControlProfile> before = profiles.find(peek.get().deviceId());
+        PreChecks pre = before.filter(ControlProfile::controllable)
+                .map(p -> preChecks(p, peek.get().priority(), peek.get().capability(), peek.get().command(), peek.get().args()))
+                .orElse(new PreChecks(Optional.empty(), net.java21.data2flow.action.actuation.domain.InterlockEvaluator.Decision.PASS));
         Boolean dispatch = tx.execute(status -> {
             Optional<Command> locked = commands.lock(commandId);
             if (locked.isEmpty() || locked.get().status() != CommandStatus.DELAYED) {
@@ -173,8 +204,18 @@ public class ControlFacade {
             }
             ControlProfile p = profile.get();
             ShadowRow row = shadows.lockOrCreate(c.organizationId(), c.deviceId());
+            if (pre.stop().isPresent()) {
+                events.transition(c, CommandEvents.to(c, CommandStatus.CANCELLED, CommandStatusReasons.EMERGENCY_STOP, now, null), spaceId,
+                        stopMessage(pre.stop().get()));
+                return false;
+            }
             if (manualOverrideBlocks(c, p.settings(), now)) {
                 events.transition(c, CommandEvents.to(c, CommandStatus.SKIPPED, CommandStatusReasons.MANUAL_OVERRIDE, now, null), spaceId, null);
+                return false;
+            }
+            if (pre.interlock().blocked()) {
+                events.transition(c, CommandEvents.to(c, CommandStatus.BLOCKED, CommandStatusReasons.INTERLOCK, now, null), spaceId,
+                        pre.interlock().message(), interlockDetail(pre.interlock()));
                 return false;
             }
             ModelCapability mc = p.capability(c.capability()).orElse(ModelCapability.PLAIN);
@@ -187,8 +228,8 @@ public class ControlFacade {
                 commands.save(CommandEvents.delayed(c, protection.executeAfter()));
                 return false;
             }
-            if (row.offline()) {
-                events.transition(c, CommandEvents.to(c, CommandStatus.QUEUED, null, now, c.validUntil()), spaceId, null);
+            if (mc.classADownlink() || row.offline()) {
+                waitForDevice(c, mc, row, p, spaceId, now);
                 return false;
             }
             events.transition(c, CommandEvents.to(c, CommandStatus.REQUESTED, "RECHECK", now, now), spaceId, null);
@@ -201,7 +242,7 @@ public class ControlFacade {
 
     // ───────────── 검사 단계 ─────────────
 
-    private Decided decide(Command c, CommandRequest req, ControlProfile p, Instant now) {
+    private Decided decide(Command c, CommandRequest req, ControlProfile p, Instant now, PreChecks pre) {
         Long spaceId = p.spaceId();
         if (req.expired()) {
             return end(c, CommandStatus.FAILED, CommandStatusReasons.EXPIRED, spaceId, null, null, now);
@@ -226,12 +267,22 @@ public class ControlFacade {
             ArgViolation v = validation.violations().get(0);
             return end(c, CommandStatus.REJECTED, reasonOf(v.reason()), spaceId, validationRejection(validation, v), null, now);
         }
-        // [비상 정지 BR-ACT-12: ACT-06.03(M4)]
+        if (pre.stop().isPresent()) {
+            // 비상 정지(BR-ACT-12): 범위 안의 AUTO·SCHEDULE·AI는 건너뛴다. MANUAL·SAFETY는 여기까지 오지 않는다
+            return end(c, CommandStatus.SKIPPED, CommandStatusReasons.EMERGENCY_STOP, spaceId, null, stopMessage(pre.stop().get()), now);
+        }
         ShadowRow row = shadows.lockOrCreate(c.organizationId(), c.deviceId());
         if (manualOverrideBlocks(c, p.settings(), now)) {
             return end(c, CommandStatus.SKIPPED, CommandStatusReasons.MANUAL_OVERRIDE, spaceId, null, null, now);
         }
-        // [인터락 BR-ACT-11: ACT-06.02(M4)]
+        if (pre.interlock().blocked()) {
+            // 인터락(BR-ACT-11): 요청자에게 인터락의 message를 돌려준다
+            String message = pre.interlock().message();
+            Command after = events.transition(c, CommandEvents.to(c, CommandStatus.BLOCKED, CommandStatusReasons.INTERLOCK, now, null), spaceId,
+                    message, interlockDetail(pre.interlock()));
+            meters.counter("data2flow_action_interlock_blocked_total").increment();
+            return new Decided(after, rejection(ActionErrorCode.COMMAND_BLOCKED, List.of(), message), message);
+        }
         if (row.shadow().noChange(c.capability(), c.args())) {
             return end(c, CommandStatus.SKIPPED, CommandStatusReasons.NO_CHANGE, spaceId, null, null, now);
         }
@@ -251,8 +302,11 @@ public class ControlFacade {
             if (RateGuards.oscillating(c.priority(), recent, target.get(), settings.oscillation().flips())) {
                 log.warn("진동 차단(WARNING) device={} capability={} commands={}", c.deviceId(), c.capability(), recent.size() + 1);
                 meters.counter("data2flow_action_oscillation_blocked_total").increment();
-                return end(c, CommandStatus.BLOCKED, CommandStatusReasons.OSCILLATION, spaceId,
+                Decided d = end(c, CommandStatus.BLOCKED, CommandStatusReasons.OSCILLATION, spaceId,
                         rejection(ActionErrorCode.COMMAND_BLOCKED, List.of(), "OSCILLATION"), "반대 명령이 반복되어 차단했습니다", now);
+                // EVT-ACT-08: core가 WARNING 시스템 알람 system:OSCILLATION:{deviceId}:{capability}를 만든다(ADR-048)
+                events.oscillationBlocked(d.command(), spaceId, recent.size() + 1, settings.oscillation().windowSec());
+                return d;
             }
         }
         Optional<Duration> wait = RateGuards.minInterval(c.priority(), commands.lastSentAt(c.deviceId(), c.capability(), c.id())
@@ -273,11 +327,48 @@ public class ControlFacade {
             Command delayed = CommandEvents.delayed(c, protection.executeAfter());
             return new Decided(events.transition(c, delayed, spaceId, null), null, null);
         }
-        if (row.offline()) {
-            return new Decided(events.transition(c, CommandEvents.to(c, CommandStatus.QUEUED, null, now, c.validUntil()), spaceId, null),
-                    null, null);
+        if (mc.classADownlink() || row.offline()) {
+            return new Decided(waitForDevice(c, mc, row, p, spaceId, now), null, null);
         }
         return new Decided(c, null, null);   // REQUESTED, 커밋 뒤 드라이버 호출
+    }
+
+    /**
+     * 기기가 받을 수 있을 때까지 기다린다: LoRaWAN Class A는 다음 업링크 직후(QUEUED_FOR_DOWNLINK, 예상 시각 = 마지막 업링크 + 보고 주기,
+     * ACT-07.02), 오프라인이면 복귀까지(QUEUED, 기기당 10개, BR-ACT-13). 둘 다 유효 시각이 지나면 FAILED(EXPIRED).
+     */
+    private Command waitForDevice(Command c, ModelCapability mc, ShadowRow row, ControlProfile p, Long spaceId, Instant now) {
+        if (mc.classADownlink()) {
+            Command queued = events.transition(c, CommandEvents.to(c, CommandStatus.QUEUED_FOR_DOWNLINK, null, now, c.validUntil()), spaceId, null);
+            commands.saveExpectedDelivery(c.id(), net.java21.data2flow.action.actuation.domain.ClassADownlink.expectedDelivery(
+                    row.shadow().reportedAt(), p.reportIntervalSec(), now));
+            return queued;
+        }
+        if (commands.countQueued(c.deviceId()) >= MAX_QUEUED_PER_DEVICE) {
+            return events.transition(c, CommandEvents.to(c, CommandStatus.FAILED, QUEUE_FULL, now, null), spaceId,
+                    "오프라인 대기열이 가득 찼습니다(기기당 " + MAX_QUEUED_PER_DEVICE + "개)");
+        }
+        return events.transition(c, CommandEvents.to(c, CommandStatus.QUEUED, null, now, c.validUntil()), spaceId, null);
+    }
+
+    private static String stopMessage(net.java21.data2flow.action.actuation.domain.EmergencyStop stop) {
+        return "비상 정지 중" + (stop.reason() == null ? "" : ": " + stop.reason());
+    }
+
+    private static Map<String, Object> interlockDetail(net.java21.data2flow.action.actuation.domain.InterlockEvaluator.Decision d) {
+        Map<String, Object> detail = new LinkedHashMap<>();
+        if (d.interlock().interlockId() != null) {
+            detail.put("interlockId", d.interlock().interlockId().toString());
+        }
+        detail.put("interlockReason", d.reason().name());
+        return detail;
+    }
+
+    /** 출처의 우선순위(BR-ACT-24). 장면은 실행 출처를 따른다 */
+    static CommandPriority priorityOf(CommandSource source) {
+        return source.type() == SourceType.SCENE
+                ? CommandPriority.forScene(net.java21.data2flow.action.actuation.domain.SceneRules.origin(source))
+                : CommandPriority.forSource(source.type());
     }
 
     private boolean manualOverrideBlocks(Command c, ControlSettings settings, Instant now) {
@@ -345,7 +436,7 @@ public class ControlFacade {
     }
 
     private static CommandSource requireSource(CommandSource source) {
-        if (source == null || source.type() == SourceType.SCENE || source.type() == SourceType.UNKNOWN) {
+        if (source == null || source.type() == SourceType.UNKNOWN) {
             throw new BusinessException(CommonErrorCode.INVALID_REQUEST,
                     List.of(new FieldErrorDetail("source.type", "INVALID", "지원하지 않는 출처입니다")));
         }
@@ -412,6 +503,16 @@ public class ControlFacade {
         }
         switch (s.type()) {
             case USER, BULK -> b.actor(AuditActorType.USER, String.valueOf(s.userId()), null);
+            case SCENE -> {
+                b.detail("sceneRunId", s.sceneRunId());
+                if (s.userId() != null) {
+                    b.actor(AuditActorType.USER, String.valueOf(s.userId()), null);
+                } else if (s.flowId() != null) {
+                    b.actor(AuditActorType.FLOW, s.flowId(), null);
+                } else {
+                    b.actor(AuditActorType.SYSTEM, "SCENE", null);
+                }
+            }
             case AI -> b.actor(AuditActorType.USER, String.valueOf(s.approvedBy()), null).detail("suggestionId", s.suggestionId());
             case FLOW -> b.actor(AuditActorType.FLOW, s.flowId(), null)
                     .cause(new AuditCause(s.flowId(), s.flowVersion(), s.nodeId(), s.triggerMessageId()));

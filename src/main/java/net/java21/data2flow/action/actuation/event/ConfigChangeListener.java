@@ -2,6 +2,8 @@ package net.java21.data2flow.action.actuation.event;
 
 import net.java21.data2flow.action.actuation.service.ControlProfileService;
 import net.java21.data2flow.action.actuation.service.SandboxRegistry;
+import net.java21.data2flow.action.actuation.service.InterlockService;
+import net.java21.data2flow.action.actuation.service.EmergencyStopRegistry;
 import net.java21.data2flow.contracts.message.ConfigChangedMessage;
 import net.java21.data2flow.contracts.message.MessageCodec;
 import org.slf4j.Logger;
@@ -20,6 +22,8 @@ import org.springframework.amqp.core.MessageListener;
  *   <tr><td>CAPABILITY</td><td>그 기능(id = 기능 이름)을 지원하는 기기 프로필(ACT-01.04)</td></tr>
  *   <tr><td>SPACE·SETTING</td><td>모든 제어 프로필(공간 이동, 조직 제어 설정)</td></tr>
  *   <tr><td>SIM_SANDBOX</td><td>샌드박스 목록을 다시 읽음(1초 안 반영, TC-ACT-030)</td></tr>
+ *   <tr><td>INTERLOCK</td><td>인터락 캐시 전체(ACT-06.02). DEVICE도 그 기기 인터락을 지운다</td></tr>
+ *   <tr><td>EMERGENCY_STOP</td><td>비상 정지 목록을 다시 읽음(1초 안 반영, BR-ACT-12). 파드마다 받는다</td></tr>
  *   <tr><td>UNKNOWN</td><td>모든 제어 프로필(이 코드가 모르는 새 종류일 수 있으므로 안전하게)</td></tr>
  * </table>
  * 재연결하면 놓친 메시지가 있을 수 있으므로 모두 지운다.
@@ -31,10 +35,15 @@ public class ConfigChangeListener implements MessageListener {
     private final ControlProfileService profiles;
     private final SandboxRegistry sandbox;
     private final MessageCodec codec = MessageCodec.create();
+    private final InterlockService interlocks;
+    private final EmergencyStopRegistry emergency;
 
-    public ConfigChangeListener(ControlProfileService profiles, SandboxRegistry sandbox) {
+    public ConfigChangeListener(ControlProfileService profiles, SandboxRegistry sandbox, InterlockService interlocks,
+                                EmergencyStopRegistry emergency) {
         this.profiles = profiles;
         this.sandbox = sandbox;
+        this.interlocks = interlocks;
+        this.emergency = emergency;
     }
 
     @Override
@@ -54,14 +63,28 @@ public class ConfigChangeListener implements MessageListener {
             case DEVICE, ATTRIBUTE -> {
                 try {
                     profiles.invalidate(Long.parseLong(change.id()));
+                    interlocks.invalidate(Long.parseLong(change.id()));
                 } catch (NumberFormatException e) {
                     profiles.invalidateAll();
+                    interlocks.invalidateAll();
+                }
+            }
+            case INTERLOCK -> interlocks.invalidateAll();
+            case EMERGENCY_STOP -> {
+                try {
+                    emergency.reload();
+                } catch (RuntimeException e) {
+                    log.warn("비상 정지 목록을 다시 읽지 못했습니다(다음 판정 때 다시): {}", e.toString());
+                    emergency.invalidate();
                 }
             }
             case MODEL -> byId(change, profiles::invalidateModel);
             case DRIVER -> byId(change, profiles::invalidateDriver);
             case CAPABILITY -> profiles.invalidateCapability(change.id());
-            case SPACE, SETTING, UNKNOWN -> profiles.invalidateAll();
+            case SPACE, SETTING, UNKNOWN -> {
+                profiles.invalidateAll();
+                interlocks.invalidateAll();
+            }
             case SIM_SANDBOX -> {
                 try {
                     sandbox.reload();
@@ -88,5 +111,7 @@ public class ConfigChangeListener implements MessageListener {
     public void invalidateAll() {
         profiles.invalidateAll();
         sandbox.invalidate();
+        interlocks.invalidateAll();
+        emergency.invalidate();
     }
 }

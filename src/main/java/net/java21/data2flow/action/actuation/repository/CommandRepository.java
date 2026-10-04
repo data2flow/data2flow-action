@@ -161,7 +161,7 @@ public class CommandRepository {
         return jdbc.sql("""
                         SELECT id, status FROM data2flow_action.commands
                          WHERE env = :env
-                           AND ((status IN ('REQUESTED','QUEUED','SENT','ACKED') AND timeout_at <= :now)
+                           AND ((status IN ('REQUESTED','QUEUED','QUEUED_FOR_DOWNLINK','SENT','ACKED') AND timeout_at <= :now)
                              OR (status = 'DELAYED' AND execute_after <= :now))
                          ORDER BY coalesce(timeout_at, execute_after)
                          LIMIT :limit
@@ -169,6 +169,72 @@ public class CommandRepository {
                 .param("env", env).param("now", Pg.ts(now)).param("limit", limit)
                 .query((rs, n) -> new Due(rs.getObject("id", UUID.class), CommandStatus.valueOf(rs.getString("status"))))
                 .list();
+    }
+
+    /** 기기의 오프라인 대기 명령 수(BR-ACT-13: 기기당 10개) */
+    @OrganizationScopeExempt("기기 ID(전역 고유)로 센다")
+    public int countQueued(long deviceId) {
+        return jdbc.sql("SELECT count(*) FROM data2flow_action.commands WHERE device_id = :device AND status = 'QUEUED'")
+                .param("device", deviceId).query(Integer.class).single();
+    }
+
+    /** 기기의 Class A 다운링크 대기 명령(업링크 직후 등록, ACT-07.02), 잠금 */
+    @OrganizationScopeExempt("업링크 처리: 기기 ID(전역 고유)로 찾는다")
+    public List<Command> lockDownlinks(long deviceId) {
+        return jdbc.sql("SELECT " + COLUMNS + " FROM data2flow_action.commands WHERE device_id = :device AND status = 'QUEUED_FOR_DOWNLINK'"
+                        + " ORDER BY requested_at FOR UPDATE")
+                .param("device", deviceId).query(MAPPER).list();
+    }
+
+    /** Class A 예상 전달 시각(ACT-07.02) */
+    @OrganizationScopeExempt("잠근 행을 명령 ID(전역 고유 UUID)로 갱신")
+    public void saveExpectedDelivery(UUID id, Instant at) {
+        jdbc.sql("UPDATE data2flow_action.commands SET expected_delivery_at = :at WHERE id = :id").param("at", Pg.ts(at)).param("id", id).update();
+    }
+
+    public Optional<Instant> findExpectedDelivery(long organizationId, UUID id) {
+        return jdbc.sql("SELECT expected_delivery_at AS t FROM data2flow_action.commands WHERE organization_id = :org AND id = :id")
+                .param("org", organizationId).param("id", id).query((rs, n) -> Optional.ofNullable(Pg.instant(rs, "t"))).optional()
+                .flatMap(o -> o);
+    }
+
+    /** 조직의 대기 중 자동 명령(비상 정지 시작 때 취소, BR-ACT-12), 잠금 */
+    public List<Command> lockPendingAutomatic(long organizationId) {
+        return jdbc.sql("SELECT " + COLUMNS + " FROM data2flow_action.commands WHERE organization_id = :org"
+                        + " AND status IN ('DELAYED','QUEUED','QUEUED_FOR_DOWNLINK') AND priority IN ('AUTO','SCHEDULE','AI')"
+                        + " ORDER BY requested_at FOR UPDATE")
+                .param("org", organizationId).query(MAPPER).list();
+    }
+
+    /** 일괄·장면 실행의 명령들(source_type·source_ref 생성 열) */
+    public List<Command> findBySource(long organizationId, String sourceType, String sourceRef) {
+        return jdbc.sql("SELECT " + COLUMNS + " FROM data2flow_action.commands WHERE organization_id = :org AND source_type = :type"
+                        + " AND source_ref = :ref ORDER BY requested_at, id")
+                .param("org", organizationId).param("type", sourceType).param("ref", sourceRef).query(MAPPER).list();
+    }
+
+    /** 인터락 차단 기록(API-ACT-16 blocks): 차단 전이의 detail.interlockId */
+    public List<java.util.Map<String, Object>> findInterlockBlocks(long organizationId, long interlockId, Instant from, Instant to, int limit) {
+        return jdbc.sql("""
+                        SELECT e.at, c.id, c.device_id, c.capability, c.command, c.args::text AS args, c.source::text AS source, e.detail->>'message' AS message
+                          FROM data2flow_action.command_events e JOIN data2flow_action.commands c ON c.id = e.command_id
+                         WHERE e.organization_id = :org AND e.to_status = 'BLOCKED' AND e.reason = 'INTERLOCK'
+                           AND e.detail->>'interlockId' = :interlock AND e.at >= :from AND e.at < :to
+                         ORDER BY e.at DESC LIMIT :limit""")
+                .param("org", organizationId).param("interlock", Long.toString(interlockId)).param("from", Pg.ts(from)).param("to", Pg.ts(to))
+                .param("limit", limit)
+                .query((rs, n) -> {
+                    java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+                    m.put("at", Pg.instant(rs, "at"));
+                    m.put("commandId", rs.getObject("id", UUID.class).toString());
+                    m.put("deviceId", Long.toString(rs.getLong("device_id")));
+                    m.put("capability", rs.getString("capability"));
+                    m.put("command", rs.getString("command"));
+                    m.put("args", Json.map(rs.getString("args")));
+                    m.put("source", Json.map(rs.getString("source")));
+                    m.put("message", rs.getString("message"));
+                    return m;
+                }).list();
     }
 
     /** 기기별 명령 이력 커서 목록(API-ACT-02, 최신순). 커서는 (requested_at, id) */

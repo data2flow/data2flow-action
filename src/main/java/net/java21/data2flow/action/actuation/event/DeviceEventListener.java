@@ -23,24 +23,28 @@ import java.util.List;
 /**
  * {@code action.events} 소비(architecture.md §4.5). 이 서비스가 묶는 라우팅 키:
  * {@code device.command.ack}(EVT-ACT-06), {@code device.state.reported}(EVT-ACT-07), {@code device.connectivity.changed}(EVT-DEV-02),
- * {@code device.changed}(EVT-DEV-01, 삭제 시 정리·캐시 무효화). 처리는 멱등이고(상태 전이·버전 비교) 커밋 뒤 ACK한다.
+ * {@code device.changed}(EVT-DEV-01, 삭제 시 정리·캐시 무효화), {@code control.emergency.started|released}(EVT-ACT-03: 대기 중 자동 명령 취소).
+ * 처리는 멱등이고(상태 전이·버전 비교) 커밋 뒤 ACK한다.
  */
 public class DeviceEventListener implements ChannelAwareMessageListener {
 
     /** 바인딩 라우팅 키 */
     public static final List<String> ROUTING_KEYS = List.of("device.command.ack", "device.state.reported",
-            "device.connectivity.changed", "device.changed");
+            "device.connectivity.changed", "device.changed", "control.emergency.started", "control.emergency.released");
     private static final Logger log = LoggerFactory.getLogger(DeviceEventListener.class);
 
     private final CommandTracker tracker;
     private final ShadowRepository shadows;
     private final ControlProfileService profiles;
     private final MessageCodec codec = MessageCodec.create();
+    private final net.java21.data2flow.action.actuation.service.EmergencyStopHandler emergency;
 
-    public DeviceEventListener(CommandTracker tracker, ShadowRepository shadows, ControlProfileService profiles) {
+    public DeviceEventListener(CommandTracker tracker, ShadowRepository shadows, ControlProfileService profiles,
+                               net.java21.data2flow.action.actuation.service.EmergencyStopHandler emergency) {
         this.tracker = tracker;
         this.shadows = shadows;
         this.profiles = profiles;
+        this.emergency = emergency;
     }
 
     @Override
@@ -74,6 +78,13 @@ public class DeviceEventListener implements ChannelAwareMessageListener {
                 profiles.invalidate(d.deviceId());
                 if (d.change() == DeviceChanged.Change.DELETED) {
                     shadows.deleteDevice(org, d.deviceId());
+                }
+            }
+            case net.java21.data2flow.contracts.message.event.EmergencyStopChanged stop -> {
+                if (event.type().equals(net.java21.data2flow.contracts.message.EventType.CONTROL_EMERGENCY_STARTED.routingKey())) {
+                    emergency.started(org, stop);
+                } else {
+                    emergency.released(org, stop);
                 }
             }
             default -> {

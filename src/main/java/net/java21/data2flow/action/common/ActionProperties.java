@@ -19,11 +19,16 @@ import java.util.List;
  * @param outbox        아웃박스 릴레이
  * @param command       명령 기본값
  * @param mqtt          MQTT 일반 드라이버(기본 꺼짐, 공용 브로커 금지)
+ * @param effect        제어 효과 확인·가동 집계(ACT-08)
+ * @param lorawan       LoRaWAN(ChirpStack) 드라이버(기본 꺼짐, 공용 ChirpStack 금지)
+ * @param vendors       클라우드 벤더 드라이버(LG ThinQ·SmartThings, 기본 꺼짐 — 키 발급 전 "준비 중", ADR-040)
  */
 @ConfigurationProperties(prefix = "data2flow.action")
 public record ActionProperties(String env, String instanceId, String flywayMode, String coreUri, String simulatorUri,
-                               Duration profileTtl, Scheduler scheduler, Outbox outbox, CommandDefaults command, Mqtt mqtt) {
+                               Duration profileTtl, Scheduler scheduler, Outbox outbox, CommandDefaults command, Mqtt mqtt,
+                               Effect effect, LoRaWan lorawan, Vendors vendors) {
 
+    @org.springframework.boot.context.properties.bind.ConstructorBinding
     public ActionProperties {
         env = blank(env) ? "dev" : env;
         instanceId = blank(instanceId) ? "action-local-0" : instanceId;
@@ -35,6 +40,70 @@ public record ActionProperties(String env, String instanceId, String flywayMode,
         outbox = outbox == null ? new Outbox(true, Duration.ofSeconds(1), 100, Duration.ofDays(7)) : outbox;
         command = command == null ? new CommandDefaults(null, null, null, null, null, null, null, null) : command;
         mqtt = mqtt == null ? new Mqtt(false, null, 1883, null, null, null, null, 1) : mqtt;
+        effect = effect == null ? new Effect(null, null) : effect;
+        lorawan = lorawan == null ? new LoRaWan(false, null, null) : lorawan;
+        vendors = vendors == null ? new Vendors(null, null) : vendors;
+    }
+
+    /** M3 모양(효과·LoRaWAN·벤더 기본값) */
+    public ActionProperties(String env, String instanceId, String flywayMode, String coreUri, String simulatorUri, Duration profileTtl,
+                            Scheduler scheduler, Outbox outbox, CommandDefaults command, Mqtt mqtt) {
+        this(env, instanceId, flywayMode, coreUri, simulatorUri, profileTtl, scheduler, outbox, command, mqtt, null, null, null);
+    }
+
+    /**
+     * 제어 효과 확인(BR-ACT-20)과 가동 집계(BR-ACT-21).
+     *
+     * @param minChange 기대 방향 최소 변화(측정 단위, 기본 0.2 — 온도면 0.2℃)
+     * @param zone      일 집계 날짜 경계(사이트 시간대, 기본 Asia/Seoul)
+     */
+    public record Effect(Double minChange, java.time.ZoneId zone) {
+        public Effect {
+            minChange = minChange == null || minChange < 0 ? 0.2 : minChange;
+            zone = zone == null ? java.time.ZoneId.of("Asia/Seoul") : zone;
+        }
+    }
+
+    /**
+     * LoRaWAN 다운링크 드라이버(ACT-03.03). ⏸ 결정 대기: 공용 ChirpStack(s3)에 다운링크를 넣지 않는다(CLAUDE.md §5, ADR-029).
+     * 기본 꺼짐이고, 켜도 {@code deniedHosts}와 항상 금지하는 공용 주소는 거부한다. 지금은 ChirpStack API 목(MockWebServer)으로만 시험한다.
+     *
+     * @param enabled     켜기(기본 false)
+     * @param deniedHosts 추가 금지 주소
+     * @param timeout     ChirpStack API 호출 제한 시간(기본 5초)
+     */
+    public record LoRaWan(boolean enabled, List<String> deniedHosts, Duration timeout) {
+        /** 공용 인프라. 설정으로 지울 수 없게 항상 금지한다(s3 ChirpStack, 공용 MQTT 브로커) */
+        public static final List<String> SHARED_HOSTS = List.of("s3.java21.net", "iot-data.java21.net");
+
+        public LoRaWan {
+            deniedHosts = deniedHosts == null ? List.of() : List.copyOf(deniedHosts);
+            timeout = timeout == null ? Duration.ofSeconds(5) : timeout;
+        }
+    }
+
+    /**
+     * 클라우드 벤더 드라이버(ACT-03.04, ADR-040). 키가 없어 기본 꺼짐("준비 중"). 켜면 {@code baseUrl}의 벤더 API를 부른다.
+     *
+     * @param lgThinq     LG ThinQ Connect
+     * @param smartThings SmartThings
+     */
+    public record Vendors(Vendor lgThinq, Vendor smartThings) {
+        public Vendors {
+            lgThinq = lgThinq == null ? new Vendor(false, "https://api-kic.lgthinq.com", null) : lgThinq;
+            smartThings = smartThings == null ? new Vendor(false, "https://api.smartthings.com", null) : smartThings;
+        }
+    }
+
+    /**
+     * @param enabled 켜기(기본 false — 키 발급 전)
+     * @param baseUrl API 주소
+     * @param timeout 호출 제한 시간(기본 5초)
+     */
+    public record Vendor(boolean enabled, String baseUrl, Duration timeout) {
+        public Vendor {
+            timeout = timeout == null ? Duration.ofSeconds(5) : timeout;
+        }
     }
 
     static boolean blank(String s) {

@@ -68,6 +68,64 @@ public final class ActionJobs {
         }
     }
 
+    /** 제어 효과 확인(ACT-08.01, 30초)·일괄 제어 이어 하기(1분)·가동 집계(ACT-08.02, 1시간)·드라이버 호출 기록 정리(2일, 6시간) */
+    @Component
+    @ConditionalOnProperty(prefix = "data2flow.action.scheduler", name = "enabled", havingValue = "true", matchIfMissing = true)
+    static class ControlM4 {
+
+        private static final Logger log = LoggerFactory.getLogger(ControlM4.class);
+        private final net.java21.data2flow.action.actuation.service.ControlEffectService effects;
+        private final net.java21.data2flow.action.actuation.service.BulkControlService bulk;
+        private final net.java21.data2flow.action.actuation.service.RuntimeStatsService runtime;
+        private final net.java21.data2flow.action.actuation.service.DriverHealthService health;
+
+        ControlM4(net.java21.data2flow.action.actuation.service.ControlEffectService effects,
+                  net.java21.data2flow.action.actuation.service.BulkControlService bulk,
+                  net.java21.data2flow.action.actuation.service.RuntimeStatsService runtime,
+                  net.java21.data2flow.action.actuation.service.DriverHealthService health) {
+            this.effects = effects;
+            this.bulk = bulk;
+            this.runtime = runtime;
+            this.health = health;
+        }
+
+        @Scheduled(fixedDelayString = "PT30S", initialDelayString = "PT30S")
+        void effects() {
+            try {
+                effects.processDue();
+            } catch (RuntimeException e) {
+                log.warn("효과 확인 작업 실패: {}", e.toString());
+            }
+        }
+
+        @Scheduled(fixedDelayString = "PT1M", initialDelayString = "PT1M")
+        void resumeBulk() {
+            try {
+                bulk.resumeStale();
+            } catch (RuntimeException e) {
+                log.warn("일괄 제어 이어 하기 실패: {}", e.toString());
+            }
+        }
+
+        @Scheduled(fixedDelayString = "PT1H", initialDelayString = "PT2M")
+        void runtime() {
+            try {
+                runtime.aggregateRecent();
+            } catch (RuntimeException e) {
+                log.warn("가동 집계 실패: {}", e.toString());
+            }
+        }
+
+        @Scheduled(fixedDelayString = "PT6H", initialDelayString = "PT3M")
+        void purgeDriverCalls() {
+            try {
+                health.purge();
+            } catch (RuntimeException e) {
+                log.warn("드라이버 호출 기록 정리 실패: {}", e.toString());
+            }
+        }
+    }
+
     /** 보관 정리(처리 기록 7일)와 상태 구간 월 파티션 미리 만들기 */
     @Component
     @ConditionalOnProperty(prefix = "data2flow.action.scheduler", name = "enabled", havingValue = "true", matchIfMissing = true)
