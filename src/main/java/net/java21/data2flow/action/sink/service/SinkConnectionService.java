@@ -62,6 +62,9 @@ public class SinkConnectionService {
     /** [자동 생성]: 대상을 만든 뒤 다시 확인한 스키마 */
     public SchemaCheck create(long organizationId, long connectionId, String target, List<TargetSchema.Column> columns,
                               List<String> primaryKey) {
+        if (columns == null || columns.isEmpty()) {
+            throw new BusinessException(SinkErrorCode.SINK_TARGET_INVALID, List.of(), "만들 열이 없습니다");
+        }
         SinkConnection c = connection(organizationId, connectionId);
         try {
             connector(c.type()).create(c, target, columns, primaryKey);
