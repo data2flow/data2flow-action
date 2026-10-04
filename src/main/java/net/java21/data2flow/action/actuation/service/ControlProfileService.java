@@ -63,4 +63,20 @@ public class ControlProfileService {
     public void invalidateAll() {
         cache.clear();
     }
+
+    /** 그 모델의 기기 프로필만 지운다(MODEL 변경) */
+    public void invalidateModel(long modelId) {
+        cache.values().removeIf(e -> e.profile().map(p -> p.modelId() != null && p.modelId() == modelId).orElse(false));
+    }
+
+    /** 그 드라이버에 연결된 기기 프로필만 지운다(DRIVER 변경, ACT-03.05) */
+    public void invalidateDriver(long driverId) {
+        cache.values().removeIf(e -> e.profile()
+                .map(p -> p.driver() != null && p.driver().driverId() != null && p.driver().driverId() == driverId).orElse(false));
+    }
+
+    /** 그 기능을 지원하는 기기 프로필만 지운다(CAPABILITY 변경, ACT-01.04) */
+    public void invalidateCapability(String capability) {
+        cache.values().removeIf(e -> e.profile().map(p -> p.capabilities().containsKey(capability)).orElse(false));
+    }
 }

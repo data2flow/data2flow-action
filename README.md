@@ -29,7 +29,7 @@
 |---|---|---|
 | 소비 | `data2flow.actions` · `command` → `action.commands`(Quorum, DLX) | `ActionRequest` v1 kind=COMMAND(flow-engine·core 아웃박스). `executed_actions`로 한 번만 실행 |
 | 소비 | `data2flow.events` → `action.events` | `device.command.ack`, `device.state.reported`(EVT-SIM-03), `device.connectivity.changed`, `device.changed` |
-| 소비 | `data2flow.config` → 임시 큐 | DEVICE·MODEL·SETTING·SIM_SANDBOX 캐시 무효화 |
+| 소비 | `data2flow.config` → 임시 큐 | 캐시 무효화: DEVICE(그 기기)·MODEL(그 모델)·DRIVER(연결된 기기)·CAPABILITY(그 기능을 쓰는 기기)·SPACE·SETTING(전체)·SIM_SANDBOX(샌드박스 목록) |
 | 발행(아웃박스) | `data2flow.events` | `command.status.{status}`(EVT-ACT-01), `device.state.changed`(EVT-ACT-02) |
 | 호출 | core 내부 API | 제어 프로필(API-ACT-40), 샌드박스 공간(API-ACT-41), 관계 대상(API-DEV-128), 권한 판정, 감사(API-IAM-39, 아웃박스) |
 | 호출 | simulator 내부 API | `POST /internal/sim/devices/{device-id}/commands`, `GET …/state`(API-SIM-30·32) |
@@ -37,6 +37,7 @@
 ### 안전장치
 
 - MQTT 드라이버는 `data2flow.action.mqtt.enabled=true`일 때만 만들어지고(기본 꺼짐), 공용 브로커 `iot-data.java21.net`(하위 이름·같은 IP 포함)은 생성할 때 거부합니다(CLAUDE.md §5, ⏸ ACT-03.02 결정 대기). 시험은 Testcontainers Mosquitto만 씁니다.
+- 샌드박스 판정(BR-ACT-23)의 출처 공간은 행동 요청의 `source.spaceId`(플로우가 적음), 없으면 관계 대상 `target.spaceId`입니다. 기기 대상 플로우 명령도 샌드박스 공간 출처면 실제 기기를 거부합니다.
 - 로컬(local 프로필)은 큐 소비·기한 작업·아웃박스 릴레이를 끕니다. 운영과 같은 장비에 제어가 한 번 더 나가지 않게 하려는 것입니다(deployment.md §8.2).
 - staging과 prod는 DB를 함께 쓰므로 명령·아웃박스 행에 배포(`env`)를 적고, 각 배포는 자기 행만 처리합니다(ADR-030·043).
 

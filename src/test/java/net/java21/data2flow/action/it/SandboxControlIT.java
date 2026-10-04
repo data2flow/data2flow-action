@@ -61,6 +61,21 @@ class SandboxControlIT extends IntegrationTestSupport {
     }
 
     @Test
+    @DisplayName("[ACT-02.01][AT-ACT-15.1][TC-ACT-018] 기기 대상 플로우 명령도 출처 공간(source.spaceId)이 샌드박스면 실제 기기 REJECTED")
+    void deviceTargetWithSourceSpaceRejected() {
+        ActionRequest req = ActionRequest.command(Fixtures.ORG, ActionIdempotencyKeys.flow("f-sbx", "n-1", "m-dev"),
+                CommandSource.flow("f-sbx", 1, "n-1", "m-dev", Fixtures.SPACE), null,
+                new CommandPayload(CommandTarget.device(REAL_AIRCON), "Switch", "set", Map.of("on", true), true), clock);
+        MessageProperties props = new MessageProperties();
+        MessageHeaders.of(req).forEach(props::setHeader);
+        rabbit.send(MessagingNames.EXCHANGE_ACTIONS, req.routingKey(), new Message(CODEC.write(req), props));
+
+        await().atMost(Duration.ofSeconds(10)).until(() -> count("SELECT count(*) FROM data2flow_action.commands WHERE status = 'REJECTED'") == 1);
+        assertThat(jdbc.sql("SELECT status_reason FROM data2flow_action.commands").query(String.class).single()).isEqualTo("SANDBOX_FORBIDDEN");
+        assertThat(SIM.received).isEmpty();
+    }
+
+    @Test
     @DisplayName("[ACT-02.01][AT-ACT-15.2][TC-ACT-020] 같은 플로우가 가상 에어컨을 대상으로 하면 정상 진행 → APPLIED")
     void virtualDeviceAllowed() {
         flow(Fixtures.AIRCON, "m-2");

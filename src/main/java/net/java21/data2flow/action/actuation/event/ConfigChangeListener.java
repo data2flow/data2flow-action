@@ -15,9 +15,12 @@ import org.springframework.amqp.core.MessageListener;
  * <table>
  *   <tr><th>entityType</th><th>동작</th></tr>
  *   <tr><td>DEVICE·ATTRIBUTE</td><td>그 기기의 제어 프로필</td></tr>
- *   <tr><td>MODEL·SPACE·SETTING</td><td>모든 제어 프로필(모델 기능·제약, 조직 제어 설정)</td></tr>
+ *   <tr><td>MODEL</td><td>그 모델의 기기 프로필(모델 기능·제약·드라이버 연결)</td></tr>
+ *   <tr><td>DRIVER</td><td>그 드라이버에 연결된 기기 프로필(ACT-03.05)</td></tr>
+ *   <tr><td>CAPABILITY</td><td>그 기능(id = 기능 이름)을 지원하는 기기 프로필(ACT-01.04)</td></tr>
+ *   <tr><td>SPACE·SETTING</td><td>모든 제어 프로필(공간 이동, 조직 제어 설정)</td></tr>
  *   <tr><td>SIM_SANDBOX</td><td>샌드박스 목록을 다시 읽음(1초 안 반영, TC-ACT-030)</td></tr>
- *   <tr><td>UNKNOWN</td><td>모든 제어 프로필(이 코드가 모르는 CAPABILITY·DRIVER 같은 새 종류일 수 있으므로 안전하게)</td></tr>
+ *   <tr><td>UNKNOWN</td><td>모든 제어 프로필(이 코드가 모르는 새 종류일 수 있으므로 안전하게)</td></tr>
  * </table>
  * 재연결하면 놓친 메시지가 있을 수 있으므로 모두 지운다.
  */
@@ -55,7 +58,10 @@ public class ConfigChangeListener implements MessageListener {
                     profiles.invalidateAll();
                 }
             }
-            case MODEL, SPACE, SETTING, UNKNOWN -> profiles.invalidateAll();
+            case MODEL -> byId(change, profiles::invalidateModel);
+            case DRIVER -> byId(change, profiles::invalidateDriver);
+            case CAPABILITY -> profiles.invalidateCapability(change.id());
+            case SPACE, SETTING, UNKNOWN -> profiles.invalidateAll();
             case SIM_SANDBOX -> {
                 try {
                     sandbox.reload();
@@ -67,6 +73,14 @@ public class ConfigChangeListener implements MessageListener {
             default -> {
                 // 다른 서비스용(SOURCE·SCRIPT·FLOW 등)
             }
+        }
+    }
+
+    private void byId(ConfigChangedMessage change, java.util.function.LongConsumer invalidate) {
+        try {
+            invalidate.accept(Long.parseLong(change.id()));
+        } catch (NumberFormatException e) {
+            profiles.invalidateAll();
         }
     }
 

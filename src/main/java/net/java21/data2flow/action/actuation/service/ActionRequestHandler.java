@@ -75,10 +75,12 @@ public class ActionRequestHandler {
         Instant now = clock.instant();
         boolean expired = req.expiredAt(now);
         List<Command> results = new ArrayList<>();
+        // 샌드박스 판정(BR-ACT-23) 출처 공간: 플로우·규칙이 적은 source.spaceId, 없으면 관계 대상 공간
+        Long sourceSpace = req.source().spaceId() != null ? req.source().spaceId() : payload.target().spaceId();
         for (long deviceId : devices) {
             String key = keyFor(requestKey, payload.target(), deviceId);
             CommandRequest cr = new CommandRequest(req.organizationId(), deviceId, payload.capability(), payload.command(), payload.args(),
-                    req.source(), req.priority(), key, req.validUntil(), null, payload.target().spaceId(), false, expired);
+                    req.source(), req.priority(), key, req.validUntil(), null, sourceSpace, false, expired);
             try {
                 results.add(facade.submit(cr).command());
             } catch (BusinessException e) {
