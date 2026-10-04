@@ -108,7 +108,14 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-restclient</artifactId>
         </dependency>
-        <!-- MQTT 일반 드라이버(ACT-03.02). Apache-2.0, 버전은 data2flow-bom. 기본 꺼짐이고 공용 브로커 주소는 거부한다(CLAUDE.md §5) -->
+        <!-- 출력 연결(DSC-04.01): Super Stream data2flow.telemetry 소비(그룹 action-output, SAC·수동 오프셋).
+             버전은 Spring Boot 관리. Apache-2.0 / MPL-2.0 이중 라이선스(ADR-018 허용) -->
+        <dependency>
+            <groupId>com.rabbitmq</groupId>
+            <artifactId>stream-client</artifactId>
+        </dependency>
+        <!-- MQTT 일반 드라이버(ACT-03.02). Apache-2.0, 버전은 data2flow-bom. 기본 꺼짐이고 공용 브로커 주소는 거부한다(CLAUDE.md §5).
+             출력 연결(DSC-04.01, output.transport)도 같은 클라이언트로 외부 브로커에 발행한다(공용 브로커 금지) -->
         <dependency>
             <groupId>com.hivemq</groupId>
             <artifactId>hivemq-mqtt-client</artifactId>

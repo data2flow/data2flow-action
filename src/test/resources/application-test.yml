@@ -7,6 +7,10 @@ data2flow:
       enabled: false
     outbox:
       relay-enabled: false
+    # 출력 연결(M5): 스트림 소비는 스트림 IT만 켜고, 발송·지표·정리 작업은 시험이 직접 부른다
+    output:
+      consumer-enabled: false
+      sender-enabled: false
     # 알림(M4): 텔레그램 어댑터는 시험에서만 켠다(주소는 FakeTelegram MockWebServer, api.telegram.org는 부르지 않음)
     notification:
       telegram:

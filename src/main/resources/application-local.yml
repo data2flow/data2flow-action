@@ -15,3 +15,7 @@ data2flow:
       relay-enabled: ${DATA2FLOW_ACTION_RELAY_ENABLED:false}
     messaging:
       enabled: ${DATA2FLOW_ACTION_MESSAGING_ENABLED:false}
+    # 출력 연결: 로컬은 스트림 소비·발송을 끈다(운영과 같은 외부 대상에 한 번 더 보내지 않게). 켜면 그룹 action-output-<DATA2FLOW_DEVELOPER>
+    output:
+      consumer-enabled: ${DATA2FLOW_ACTION_OUTPUT_CONSUMER_ENABLED:false}
+      sender-enabled: ${DATA2FLOW_ACTION_OUTPUT_SENDER_ENABLED:false}

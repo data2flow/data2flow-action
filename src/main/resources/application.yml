@@ -125,3 +125,21 @@ data2flow:
       written-retention: 7d
       lease: 60s
       batch: 50
+    # 출력 연결(DSC-04.01, BR-DSC-19): data2flow.telemetry를 그룹 action-output으로 따로 읽어 연결마다 대기열에 쌓고 순서대로 보낸다.
+    # 실패는 1초부터 2배·최대 5분 간격으로 24시간까지 재시도 후 실패 보관함. 공용 브로커 iot-data.java21.net은 항상 접속 금지(CLAUDE.md §5)
+    output:
+      consumer-enabled: ${DATA2FLOW_ACTION_OUTPUT_CONSUMER_ENABLED:true}
+      sender-enabled: ${DATA2FLOW_ACTION_OUTPUT_SENDER_ENABLED:true}
+      developer: ${DATA2FLOW_DEVELOPER:}
+      stream-port: ${DATA2FLOW_RABBITMQ_STREAM_PORT:5552}
+      runtime-refresh: 30s
+      context-ttl: 60s
+      sender-period: 500ms
+      retry-initial: 1s
+      retry-max: 5m
+      max-retry-age: 24h
+      lease: 60s
+      batch: 100
+      retention: 7d
+      test-timeout: 10s
+      denied-hosts: iot-data.java21.net

@@ -31,10 +31,17 @@ class ArchitectureTest {
                     net.java21.data2flow.action.actuation.driver.DriverCommand.class)
             .because("모든 명령은 제어 창구를 거친다(ACT-02.01, ADR-009)");
 
-    /** [ACT-03.02] MQTT 클라이언트는 MQTT 드라이버 패키지에만(공용 브로커 금지 장치가 있는 곳) */
+    /** [ACT-03.02][DSC-04.01] MQTT 클라이언트는 MQTT 드라이버와 출력 연결 발송 패키지에만(공용 브로커 금지 장치가 있는 곳) */
     @ArchTest
     static final ArchRule mqttOnlyInDriver = noClasses()
-            .that().resideOutsideOfPackage("..actuation.driver.mqtt..")
+            .that().resideOutsideOfPackages("..actuation.driver.mqtt..", "..output.transport..")
             .should().dependOnClassesThat().resideInAnyPackage("com.hivemq..", "org.eclipse.paho..")
-            .because("공용 브로커 iot-data.java21.net 발행 금지(CLAUDE.md §5): 금지 장치(MqttBrokerGuard)를 거치는 드라이버만 MQTT를 쓴다");
+            .because("공용 브로커 iot-data.java21.net 발행 금지(CLAUDE.md §5): 금지 장치(MqttBrokerGuard·output HostGuard)를 거치는 곳만 MQTT를 쓴다");
+
+    /** [DSC-04.01] 출력 연결은 제어·알림 패키지와 분리한다(M5, milestones.md): output은 actuation·notification·sink에 기대지 않는다 */
+    @ArchTest
+    static final ArchRule outputIsSeparate = noClasses()
+            .that().resideInAPackage("..action.output..")
+            .should().dependOnClassesThat().resideInAnyPackage("..action.actuation..", "..action.notification..", "..action.sink..")
+            .because("출력 연결은 M4가 고치는 actuation·notification과 별도 패키지다");
 }
