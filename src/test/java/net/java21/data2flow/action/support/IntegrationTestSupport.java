@@ -54,10 +54,13 @@ public abstract class IntegrationTestSupport {
 
     protected static final FakeCore CORE = new FakeCore();
     protected static final FakeSimulator SIM = new FakeSimulator();
+    /** 텔레그램 Bot API 대역(notification 패키지, OPS-06.01) */
+    protected static final FakeTelegram TELEGRAM = new FakeTelegram();
     protected static final MessageCodec CODEC = MessageCodec.create();
 
     @DynamicPropertySource
     static void infrastructure(DynamicPropertyRegistry registry) {
+        registry.add("data2flow.action.notification.telegram.api-base-url", TELEGRAM::url);
         registry.add("spring.datasource.url", TestInfrastructure.POSTGRES::getJdbcUrl);
         registry.add("spring.datasource.username", TestInfrastructure.POSTGRES::getUsername);
         registry.add("spring.datasource.password", TestInfrastructure.POSTGRES::getPassword);
@@ -109,6 +112,7 @@ public abstract class IntegrationTestSupport {
         jdbc.sql("TRUNCATE " + String.join(", ", tables.stream().map(t -> "data2flow_action." + t).toList()) + " CASCADE").update();
         CORE.reset();
         SIM.reset();
+        TELEGRAM.reset();
         profiles.invalidateAll();
         sandbox.invalidate();
         interlocks.invalidateAll();
