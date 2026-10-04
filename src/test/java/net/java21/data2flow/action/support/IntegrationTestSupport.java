@@ -94,6 +94,8 @@ public abstract class IntegrationTestSupport {
     @Autowired
     protected net.java21.data2flow.action.actuation.service.InterlockService interlocks;
     @Autowired
+    protected net.java21.data2flow.contracts.authz.PermissionLookup permissionLookup;
+    @Autowired
     protected net.java21.data2flow.action.actuation.service.EmergencyStopRegistry emergencyStops;
     @LocalServerPort
     protected int port;
@@ -117,6 +119,14 @@ public abstract class IntegrationTestSupport {
         sandbox.invalidate();
         interlocks.invalidateAll();
         emergencyStops.invalidate();
+        // 권한 캐시(10초): 시계가 시험마다 T0로 돌아가므로 이전 시험의 역할이 남지 않게 지운다
+        if (permissionLookup instanceof net.java21.data2flow.contracts.authz.CachingPermissionLookup caching) {
+            for (long org = 1; org <= 3; org++) {
+                for (long user = 1; user <= 1000; user++) {
+                    caching.evict(org, user);
+                }
+            }
+        }
         SIM.events = new FakeSimulator.Events() {
             @Override
             public void ack(long deviceId, String commandId, boolean acked) {

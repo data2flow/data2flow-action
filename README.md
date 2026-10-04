@@ -51,10 +51,42 @@
 | `data2flow.action.mqtt.enabled` | `false` | MQTT 드라이버 |
 | `data2flow.action.messaging.enabled` / `scheduler.enabled` / `outbox.relay-enabled` | `true` (local은 `false`) | 큐 소비·기한 작업·릴레이 |
 
+## M4 기능 (자동화 완성, ADR-049)
+
+| 패키지 | 내용 | 스펙 |
+|---|---|---|
+| `actuation` | 인터락(데이터 없음이면 안전 쪽 차단)·비상 정지(대기 자동 명령 취소, 새 자동 명령 SKIPPED)·진동 차단 이벤트(EVT-ACT-08)·서킷 브레이커와 드라이버 지표(EVT-ACT-05)·오프라인 대기열(기기당 10개)·LoRaWAN Class A 다운링크 대기·효과 확인(EVT-ACT-04)·가동 집계·일괄 제어·장면 실행/미리보기, LoRaWAN·LG ThinQ·SmartThings 드라이버(모두 기본 꺼짐) | ACT-02.06, 03.03~03.06, 05.01·05.03, 06.02·06.03·06.05, 07.01~07.03, 08.01·08.02 |
+| `notification` | 채널과 무관한 공통 계층(수신자·당직·무음·방해 금지·재알림·묶음·한도·재시도 5회·에스컬레이션·메신저 콜백)과 채널 SPI(contracts `NotificationChannel`), 텔레그램 채널(기본 꺼짐) | RUL-02.07, 03.01~03.06, 05.02·05.03, OPS-06.01·06.03~06.06 |
+| `sink` | Sink 커넥터 SPI·계약 키트, PostgreSQL·MySQL(MariaDB Connector/J)·InfluxDB 2, 배치 저장 → 재시도 → dead-letter 24시간·재전송, 대상 표시 테이블로 정확히 한 번 | FLW-04.01~04.05 |
+
+### 내부 API (M4)
+
+- 제어: `POST /internal/action/bulk`, `GET /internal/action/bulk-jobs/{bulk-job-id}`, `POST /internal/action/scenes/{scene-id}/run|preview`, `GET /internal/action/scene-runs/{scene-run-id}`, `GET /internal/action/drivers/{driver-id}/metrics`, `GET /internal/action/devices/{device-id}/runtime`, `GET /internal/action/interlocks/{interlock-id}/blocks`
+- 알림: `POST /internal/action/notifications`, `POST /internal/action/notifications/callbacks/{channel}`, `GET /internal/action/notifications/deliveries`, `POST …/deliveries/{delivery-id}/resend`, `POST …/channels/test`, `POST …/channels/{channel-id}/webhook`, `GET …/channel-types`, `POST …/links`
+- Sink: `POST /internal/action/sinks/connections/test`, `POST …/connections/{connection-id}/test`, `GET|POST …/connections/{connection-id}/schema`, `GET …/connections/{connection-id}/dead-letters`, `POST …/dead-letters/resend`
+
+### 메시지 (M4)
+
+| 방향 | 채널 | 내용 |
+|---|---|---|
+| 소비 | `action.notifications`·`action.sinks`(Quorum, DLX) | 행동 요청 NOTIFY·SINK |
+| 소비 | `action.events` 추가 | `control.emergency.started|released` |
+| 소비 | `action.notification.events` | `alarm.acked`·`alarm.cleared`(에스컬레이션 취소) |
+| 소비 | `data2flow.config` | INTERLOCK·EMERGENCY_STOP·SINK_CONNECTION·NOTIFICATION_*·SILENCE·ON_CALL·NOTIFY_PREFERENCE |
+| 발행 | `data2flow.events` | `control.oscillation.blocked`, `command.no-effect`, `driver.circuit.opened|closed`, `notification.delivered|failed` |
+| 호출 | core 내부 API | API-ACT-44~47, API-FLW-85, API-OPS-35, API-RUL-40~50(ADR-049) |
+
+### 안전장치 (M4)
+
+- LoRaWAN 드라이버는 `data2flow.action.lorawan.enabled=true`일 때만 만들어지고(기본 꺼짐), 공용 ChirpStack `s3.java21.net`·공용 브로커 `iot-data.java21.net`(하위 이름·같은 IP 포함)은 호출마다 거부합니다(CLAUDE.md §5, ⏸ ACT-03.03). 시험은 ChirpStack API 목만 씁니다.
+- LG ThinQ·SmartThings 드라이버는 키가 없어 기본 꺼짐("준비 중", ADR-040)이고, 계약 테스트는 공개 문서 모양의 응답을 흉내 내는 MockWebServer만 씁니다.
+- 텔레그램 채널은 `data2flow.action.notification.telegram.enabled=true`일 때만 발송합니다(기본 꺼짐). 봇 토큰은 core 알림 채널 정의에 암호화돼 있고 core가 복호화해 넘깁니다. 시험은 Bot API 목만 씁니다.
+- MySQL 대상은 MariaDB Connector/J(LGPL-2.1, 수정 없이)로 씁니다. MySQL Connector/J(GPL)는 쓰지 않습니다(ADR-018).
+
 ## 빌드와 실행
 
 ```bash
-./mvnw verify                 # 단위·계약(Mosquitto)·통합(Testcontainers PostgreSQL 18·RabbitMQ 3.13) + 커버리지 80% 검사(Docker 필요)
+./mvnw verify                 # 단위·계약(Mosquitto·MySQL 8.4·InfluxDB 2.7)·통합(Testcontainers PostgreSQL 18·RabbitMQ 3.13) + 커버리지 80% 검사(Docker 필요)
 ./mvnw spring-boot:run        # 로컬 실행(프로필 local)
 ```
 

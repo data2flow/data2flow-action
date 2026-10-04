@@ -156,12 +156,7 @@
             <artifactId>testcontainers-postgresql</artifactId>
             <scope>test</scope>
         </dependency>
-        <!-- Sink 계약·통합 시험: MySQL 8(Testcontainers 모듈), InfluxDB 2(GenericContainer). MIT -->
-        <dependency>
-            <groupId>org.testcontainers</groupId>
-            <artifactId>testcontainers-mysql</artifactId>
-            <scope>test</scope>
-        </dependency>
+        <!-- Sink 계약·통합 시험: MySQL 8.4·InfluxDB 2는 GenericContainer(MySQLContainer는 MySQL Connector/J를 요구해 쓰지 않음) -->
         <!-- 가짜 simulator·core 내부 API(외부 HTTP 대역, testing/backend.md). Apache-2.0 -->
         <dependency>
             <groupId>com.squareup.okhttp3</groupId>

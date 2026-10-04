@@ -47,8 +47,8 @@ class DriverMetricsIT extends IntegrationTestSupport {
         assertThat(get(api(Fixtures.USER, Fixtures.ORG), "/internal/action/drivers/9/metrics?window=24h").response().path("requests").asInt())
                 .isEqualTo(101);
         // DRIVER_MANAGE가 없으면 403
-        CORE.roles.put(8L, "OPERATOR");
-        assertThat(get(api(8, Fixtures.ORG), "/internal/action/drivers/9/metrics").status()).isEqualTo(403);
+        CORE.roles.put(901L, "OPERATOR");   // 권한 캐시(10초)가 다른 시험과 섞이지 않게 이 시험만 쓰는 사용자
+        assertThat(get(api(901, Fixtures.ORG), "/internal/action/drivers/9/metrics").status()).isEqualTo(403);
         // 호출이 없는 드라이버는 UNTESTED
         assertThat(get(api(Fixtures.USER, Fixtures.ORG), "/internal/action/drivers/77/metrics").response().path("status").asString())
                 .isEqualTo("UNTESTED");
