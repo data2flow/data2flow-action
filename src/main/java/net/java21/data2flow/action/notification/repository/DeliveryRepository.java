@@ -24,7 +24,7 @@ public class DeliveryRepository {
     private static final String COLUMNS = """
             id, organization_id, idempotency_key, channel_id, channel_type, source_type, source_id, alarm_id, aggregate_id, recipient_key,
             user_id, request_key, event, severity, step_no, payload::text AS payload, digest_count, status, skip_reason, attempt,
-            next_retry_at, last_error, external_message_id, created_at, sent_at""";
+            next_retry_at, last_error, external_message_id, created_at, sent_at""" + " ";
 
     private final JdbcClient jdbc;
 

@@ -86,6 +86,9 @@ public class ChannelAdminService {
     public record TestResult(boolean ok, long latencyMs, String providerResponse) {
     }
 
+    /** 저장 전 시험(test-draft)의 임시 채널 ID(ChannelSettings는 1 이상이어야 함) */
+    static final long DRAFT_CHANNEL_ID = Long.MAX_VALUE;
+
     public TestResult test(long organizationId, TestRequest req) {
         ChannelDefinition saved = req.channelId() == null ? null : core.channel(Long.parseLong(req.channelId()))
                 .filter(c -> c.organizationId() == organizationId)
@@ -101,7 +104,7 @@ public class ChannelAdminService {
             });
         }
         JsonNode config = req.config() != null ? req.config() : saved == null ? null : saved.config();
-        ChannelDefinition def = new ChannelDefinition(saved == null ? 0 : saved.channelId(), organizationId, "test", impl.key(), config,
+        ChannelDefinition def = new ChannelDefinition(saved == null ? DRAFT_CHANNEL_ID : saved.channelId(), organizationId, "test", impl.key(), config,
                 secrets, 20, 60, true);
         String address = req.chatId() != null ? req.chatId() : def.defaultAddresses().stream().findFirst().orElseThrow(() ->
                 new BusinessException(CommonErrorCode.INVALID_REQUEST, List.of(new FieldErrorDetail("chatId", "REQUIRED", "보낼 대화방이 없습니다"))));
