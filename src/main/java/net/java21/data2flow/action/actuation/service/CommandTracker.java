@@ -27,6 +27,8 @@ import net.java21.data2flow.contracts.message.event.DeviceCommandAck;
 import net.java21.data2flow.contracts.message.event.DeviceConnectivityChanged;
 import net.java21.data2flow.contracts.message.event.DeviceStateChanged;
 import net.java21.data2flow.contracts.message.event.DeviceStateReported;
+import net.java21.data2flow.contracts.message.event.LoRaWanDownlinkAck;
+import net.java21.data2flow.action.actuation.driver.lorawan.LoRaWanDriver;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -51,6 +53,7 @@ import java.util.UUID;
  *
  * <ul>
  *   <li>{@code device.command.ack}(EVT-ACT-06): SENT → ACKED / FAILED. 모르는 commandId는 무시하고 지표만 올린다(TC-ACT-037).</li>
+ *   <li>{@code lorawan.downlink.ack}(EVT-ACT-09): 다운링크 큐 항목 ID(DB)로 명령을 찾아 위와 같은 경로로 처리한다(ACT-03.03).</li>
  *   <li>{@code device.state.reported}(EVT-ACT-07): 버전이 클 때만 반영(BR-ACT-05) → 목표와 같아진 진행 중 명령 APPLIED →
  *       수동 명령이면 수동 우선 시작(BR-ACT-08) → 보호 상태·상태 구간 갱신 → EVT-ACT-02 {@code device.state.changed}.</li>
  *   <li>{@code device.connectivity.changed}(EVT-DEV-02): 연결 상태 기록, 복귀하면 대기 명령 전송과 desired 재적용(BR-ACT-06·13).</li>
@@ -138,6 +141,29 @@ public class CommandTracker implements DriverEventSink {
             return;
         }
         waiter.signal(id);
+    }
+
+    /**
+     * EVT-ACT-09 {@code lorawan.downlink.ack}(ingress가 ChirpStack {@code event/ack}·{@code event/txack}에서 낸 것, ADR-054 남은 것 ①).
+     * 드라이버가 다운링크를 등록할 때 남긴 큐 항목 ID({@code commands.downlink_queue_item_id})로 명령을 찾고, 표준 ack로 바꿔
+     * {@link #ack}와 같은 경로로 SENT → ACKED/FAILED 한다. 메모리가 아니라 DB로 찾으므로 등록한 파드가 아니어도, 재시작한 뒤에도 이어진다.
+     * 다시 받은 이벤트(이중 ingress·재전달)는 이미 바뀐 상태라 아무것도 하지 않는다(멱등). 모르는 큐 항목(다른 팀 기기 등)은 무시한다.
+     */
+    public void downlinkAck(long organizationId, LoRaWanDownlinkAck ack) {
+        Optional<CommandRepository.DownlinkTarget> target = commands.findByDownlinkQueueItem(organizationId, ack.queueItemId());
+        if (target.isEmpty()) {
+            log.debug("모르는 다운링크 큐 항목의 결과를 무시합니다 queueItemId={} devEui={}", ack.queueItemId(), ack.devEui());
+            meters.counter("data2flow_action_downlink_acks_total", "result", "unknown").increment();
+            return;
+        }
+        CommandRepository.DownlinkTarget t = target.get();
+        Optional<DeviceCommandAck> standard = LoRaWanDriver.commandAck(t.commandId(), t.deviceId(), ack, t.confirmed());
+        if (standard.isEmpty()) {
+            meters.counter("data2flow_action_downlink_acks_total", "result", "ignored").increment();
+            return;   // 확인형 다운링크의 게이트웨이 송신(TXACK): 기기 확인을 기다린다
+        }
+        meters.counter("data2flow_action_downlink_acks_total", "result", standard.get().result().name()).increment();
+        ack(organizationId, standard.get());
     }
 
     private void unknownAck(DeviceCommandAck ack) {

@@ -36,7 +36,7 @@ import java.util.List;
  * <ul>
  *   <li>{@code data2flow.actions}(direct) · {@code command} → {@code action.commands}(Quorum, delivery-limit 5, DLX → {@code action.commands.dlq}), prefetch 20</li>
  *   <li>{@code data2flow.events}(topic) → {@code action.events}: {@code device.command.ack}, {@code device.state.reported},
- *       {@code device.connectivity.changed}, {@code device.changed}, {@code control.emergency.started|released}</li>
+ *       {@code device.connectivity.changed}, {@code device.changed}, {@code control.emergency.started|released}, {@code lorawan.downlink.ack}</li>
  *   <li>{@code data2flow.config}(fanout) → 인스턴스별 임시 큐 {@code action.config.*}</li>
  * </ul>
  * 소비자는 수동 ACK(DB 커밋 뒤)이고, 종료 때 처리 중인 메시지를 마친 뒤 멈춘다(graceful shutdown, reliability-and-ha.md §4).

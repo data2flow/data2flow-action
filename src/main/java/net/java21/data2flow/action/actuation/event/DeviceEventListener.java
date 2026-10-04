@@ -12,6 +12,7 @@ import net.java21.data2flow.contracts.message.event.DeviceCommandAck;
 import net.java21.data2flow.contracts.message.event.DeviceConnectivityChanged;
 import net.java21.data2flow.contracts.message.event.DeviceStateReported;
 import net.java21.data2flow.contracts.message.event.EventPayload;
+import net.java21.data2flow.contracts.message.event.LoRaWanDownlinkAck;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.core.Message;
@@ -24,14 +25,16 @@ import java.util.List;
  * {@code action.events} 소비(architecture.md §4.5). 이 서비스가 묶는 라우팅 키:
  * {@code device.command.ack}(EVT-ACT-06), {@code device.state.reported}(EVT-ACT-07: 시뮬레이터 상태 보고, pipeline LoRaWAN 업링크 신호 =
  * 빈 {@code capabilities} → Class A 대기 다운링크 전송), {@code device.connectivity.changed}(EVT-DEV-02),
- * {@code device.changed}(EVT-DEV-01, 삭제 시 정리·캐시 무효화), {@code control.emergency.started|released}(EVT-ACT-03: 대기 중 자동 명령 취소).
+ * {@code device.changed}(EVT-DEV-01, 삭제 시 정리·캐시 무효화), {@code control.emergency.started|released}(EVT-ACT-03: 대기 중 자동 명령 취소),
+ * {@code lorawan.downlink.ack}(EVT-ACT-09: ChirpStack 다운링크 결과 → 큐 항목 ID로 찾은 명령 ACKED/FAILED, ACT-03.03).
  * 처리는 멱등이고(상태 전이·버전 비교) 커밋 뒤 ACK한다.
  */
 public class DeviceEventListener implements ChannelAwareMessageListener {
 
     /** 바인딩 라우팅 키 */
     public static final List<String> ROUTING_KEYS = List.of("device.command.ack", "device.state.reported",
-            "device.connectivity.changed", "device.changed", "control.emergency.started", "control.emergency.released");
+            "device.connectivity.changed", "device.changed", "control.emergency.started", "control.emergency.released",
+            "lorawan.downlink.ack");
     private static final Logger log = LoggerFactory.getLogger(DeviceEventListener.class);
 
     private final CommandTracker tracker;
@@ -74,6 +77,7 @@ public class DeviceEventListener implements ChannelAwareMessageListener {
         switch (event.payload()) {
             case DeviceCommandAck ack -> tracker.ack(org, ack);
             case DeviceStateReported state -> tracker.reported(org, state);
+            case LoRaWanDownlinkAck downlink -> tracker.downlinkAck(org, downlink);
             case DeviceConnectivityChanged c -> tracker.connectivity(org, c);
             case DeviceChanged d -> {
                 profiles.invalidate(d.deviceId());

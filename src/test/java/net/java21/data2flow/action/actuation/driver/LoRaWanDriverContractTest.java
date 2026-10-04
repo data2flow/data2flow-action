@@ -3,6 +3,8 @@ package net.java21.data2flow.action.actuation.driver;
 import net.java21.data2flow.action.actuation.driver.lorawan.LoRaWanDriver;
 import net.java21.data2flow.action.common.Json;
 import net.java21.data2flow.action.support.MutableClock;
+import net.java21.data2flow.contracts.message.event.DeviceCommandAck;
+import net.java21.data2flow.contracts.message.event.LoRaWanDownlinkAck;
 import net.java21.data2flow.contracts.secret.Secret;
 import okhttp3.mockwebserver.Dispatcher;
 import okhttp3.mockwebserver.MockResponse;
@@ -84,7 +86,10 @@ class LoRaWanDriverContractTest extends DriverContractTest {
                 String id = "q-" + seq.incrementAndGet();
                 if ("RESPOND".equals(mode)) {
                     // 장비가 다음 수신 창에서 받고 확인(confirmed) → ChirpStack ack 이벤트
-                    CompletableFuture.runAsync(() -> DRIVER.onDownlinkAck(id, true), CompletableFuture.delayedExecutor(200, TimeUnit.MILLISECONDS));
+                    // EVT-ACT-09(ingress) → action이 DB 큐 항목 ID로 찾은 명령 → 드라이버 정규화 → 표준 ack(BR-ACT-25)
+                    CompletableFuture.runAsync(() -> SINK.ack(1, LoRaWanDriver.commandAck(UUID.fromString(commandId), 15,
+                                    LoRaWanDownlinkAck.ack(1, "70b3d57ed0000001", id, true, 1L, CLOCK.instant()), true).orElseThrow()),
+                            CompletableFuture.delayedExecutor(200, TimeUnit.MILLISECONDS));
                 }
                 return new MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json").setBody("{\"id\":\"" + id + "\"}");
             }
@@ -134,7 +139,7 @@ class LoRaWanDriverContractTest extends DriverContractTest {
     }
 
     @Test
-    @DisplayName("[ACT-03.03][AT-ACT-11.2][TC-ACT-072] 큐 등록 본문의 fPort·base64 payload가 인코더 출력과 같고 API 키 헤더 포함, 큐 ID 저장, ack → ACKED")
+    @DisplayName("[ACT-03.03][AT-ACT-11.2][TC-ACT-072] 큐 등록 본문의 fPort·base64 payload가 인코더 출력과 같고 API 키 헤더 포함, 큐 ID·confirmed 반환, EVT-ACT-09 정규화(ACK·미확인·TXACK) → ACKED·FAILED")
     void queueBodyAndAck() {
         UUID id = UUID.randomUUID();
         DriverResult r = DRIVER.execute(new DriverCommand(id, DEVICE, "Thermostat", "set", Map.of("mode", "cool", "targetTemperature", 24),
@@ -147,7 +152,19 @@ class LoRaWanDriverContractTest extends DriverContractTest {
         assertThat(HexFormat.of().formatHex(Base64.getDecoder().decode(item.path("data").asString()))).isEqualTo("020130");
         assertThat(item.path("confirmed").asBoolean()).isTrue();
         await().atMost(Duration.ofSeconds(5)).until(() -> SINK.acks.stream().anyMatch(a -> a.commandId().equals(id.toString())));
-        assertThat(DRIVER.onDownlinkAck("q-unknown", true)).isFalse();
+        assertThat(r.detail().get("confirmed")).isEqualTo(true);
+
+        // 다운링크 결과 정규화: ACK 확인 → ACKED, 미확인 → FAILED, 확인형의 TXACK는 기다림, 비확인형의 TXACK → ACKED
+        String q = (String) r.detail().get("queueItemId");
+        assertThat(LoRaWanDriver.commandAck(id, 15, LoRaWanDownlinkAck.ack(1, "70b3d57ed0000001", q, false, 2L, CLOCK.instant()), true)
+                .orElseThrow()).satisfies(a -> {
+                    assertThat(a.result()).isEqualTo(DeviceCommandAck.Result.FAILED);
+                    assertThat(a.reason()).isEqualTo(LoRaWanDriver.NOT_ACKNOWLEDGED);
+                    assertThat(a.commandId()).isEqualTo(id.toString());
+                });
+        assertThat(LoRaWanDriver.commandAck(id, 15, LoRaWanDownlinkAck.txAck(1, "70b3d57ed0000001", q, 2L, CLOCK.instant()), true)).isEmpty();
+        assertThat(LoRaWanDriver.commandAck(id, 15, LoRaWanDownlinkAck.txAck(1, "70b3d57ed0000001", q, 2L, CLOCK.instant()), false)
+                .orElseThrow().result()).isEqualTo(DeviceCommandAck.Result.ACKED);
     }
 
     @Test

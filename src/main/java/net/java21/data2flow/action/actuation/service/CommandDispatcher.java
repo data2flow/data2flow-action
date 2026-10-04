@@ -158,6 +158,9 @@ public class CommandDispatcher {
         Instant now = clock.instant();
         if (!result.detail().isEmpty()) {
             commands.saveDriverResponse(c.id(), Json.write(result.detail()));
+            if (result.status() == DriverResult.Status.ACCEPTED && result.detail().get("queueItemId") instanceof String queueItemId) {
+                commands.saveDownlinkQueueItem(c.id(), queueItemId);   // LoRaWAN: EVT-ACT-09가 이 값으로 명령을 찾는다(ACT-03.03)
+            }
         }
         if (c.status() != CommandStatus.REQUESTED) {
             return;   // ack·상태 보고가 먼저 왔다(이미 ACKED·APPLIED) 또는 다른 경로가 끝냈다

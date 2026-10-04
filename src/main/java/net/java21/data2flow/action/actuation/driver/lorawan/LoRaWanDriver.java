@@ -12,6 +12,7 @@ import net.java21.data2flow.action.actuation.driver.StateListener;
 import net.java21.data2flow.action.common.Json;
 import net.java21.data2flow.contracts.command.CommandStatusReasons;
 import net.java21.data2flow.contracts.message.event.DeviceCommandAck;
+import net.java21.data2flow.contracts.message.event.LoRaWanDownlinkAck;
 import net.java21.data2flow.contracts.secret.Secret;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,8 +35,10 @@ import java.util.UUID;
 /**
  * LoRaWAN 다운링크 드라이버(ACT-03.03, ADR-001: LoRaWAN은 ChirpStack에 맡긴다). 표준 명령을 {@link DownlinkEncoder}로 fPort·바이트로
  * 바꿔 ChirpStack v4 REST API {@code POST /api/devices/{dev-eui}/queue}에 등록한다(헤더 {@code Grpc-Metadata-Authorization: Bearer
- * {apiToken}}). 등록 응답의 큐 항목 ID를 명령과 묶어 두고, ChirpStack의 다운링크 ack 이벤트가 오면 표준 {@code device.command.ack}로
- * 바꾼다(BR-ACT-25). Class A 기기는 창구가 다음 업링크 직후에 이 드라이버를 부른다(ACT-07.02).
+ * {apiToken}}). 등록 응답의 큐 항목 ID는 결과 요약({@code queueItemId}·{@code confirmed})으로 돌려주고 창구가 명령 행
+ * ({@code commands.downlink_queue_item_id})에 남긴다. ChirpStack 다운링크 결과는 ingress가 EVT-ACT-09 {@code lorawan.downlink.ack}로
+ * 내고, action이 그 큐 항목 ID로 명령을 찾아 {@link #commandAck}로 표준 {@code device.command.ack}로 바꾼다(BR-ACT-25, ADR-054 남은 것 ①).
+ * Class A 기기는 창구가 다음 업링크 직후에 이 드라이버를 부른다(ACT-07.02).
  *
  * <p>⏸ 안전(CLAUDE.md §5): 이 드라이버는 {@code data2flow.action.lorawan.enabled=true}일 때만 만들어지고(기본 꺼짐), 호출할 때마다
  * {@link ChirpStackHostGuard}로 공용 ChirpStack(s3.java21.net)·공용 브로커 주소를 거부한다. 시험은 ChirpStack API 목(MockWebServer)만 쓴다.
@@ -46,23 +49,23 @@ public class LoRaWanDriver implements DeviceDriver {
     public static final String TYPE = "LORAWAN";
     private static final Logger log = LoggerFactory.getLogger(LoRaWanDriver.class);
     private static final int MAX_REMEMBERED = 10_000;
+    /** 확인형 다운링크를 기기가 확인하지 않았다(ChirpStack ack {@code acknowledged=false}) */
+    public static final String NOT_ACKNOWLEDGED = "DOWNLINK_NOT_ACKNOWLEDGED";
 
     private final HttpClient http;
     private final Duration timeout;
     private final List<String> deniedHosts;
     private final DriverEventSink sink;
     private final Clock clock;
-    /** 명령 ID → 큐 항목(같은 commandId 재호출 시 다시 등록하지 않음) */
-    private final Map<UUID, String> queued = java.util.Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, false) {
+    /** 명령 ID → 등록한 큐 항목(같은 commandId 재호출 시 다시 등록하지 않음. ack 조회는 DB가 맡는다) */
+    private final Map<UUID, Queued> queued = java.util.Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, false) {
         @Override
-        protected boolean removeEldestEntry(Map.Entry<UUID, String> eldest) {
+        protected boolean removeEldestEntry(Map.Entry<UUID, Queued> eldest) {
             return size() > MAX_REMEMBERED;
         }
     });
-    /** 큐 항목 → (기기, 명령) */
-    private final Map<String, Pending> byQueueItem = new java.util.concurrent.ConcurrentHashMap<>();
 
-    private record Pending(long organizationId, long deviceId, UUID commandId) {
+    private record Queued(String queueItemId, boolean confirmed) {
     }
 
     public LoRaWanDriver(Duration timeout, List<String> deniedHosts, DriverEventSink sink, Clock clock) {
@@ -112,7 +115,7 @@ public class LoRaWanDriver implements DeviceDriver {
 
     @Override
     public DriverResult execute(DriverCommand command) {
-        String previous = queued.get(command.commandId());
+        Queued previous = queued.get(command.commandId());
         if (previous != null) {
             return accepted(previous);   // 같은 commandId: 이미 큐에 있다(장비 효과 1회)
         }
@@ -141,9 +144,9 @@ public class LoRaWanDriver implements DeviceDriver {
             if (status >= 200 && status < 300) {
                 JsonNode json = Json.MAPPER.readTree(res.body().isBlank() ? "{}" : res.body());
                 String queueId = json.path("id").asString(command.commandId().toString());
-                queued.put(command.commandId(), queueId);
-                byQueueItem.put(queueId, new Pending(command.device().organizationId(), command.device().deviceId(), command.commandId()));
-                return accepted(queueId);
+                Queued q = new Queued(queueId, confirmed);
+                queued.put(command.commandId(), q);
+                return accepted(q);
             }
             if (status == 401 || status == 403) {
                 return DriverResult.failed("AUTH", false, "ChirpStack API 키가 거부되었습니다: HTTP " + status);
@@ -166,18 +169,24 @@ public class LoRaWanDriver implements DeviceDriver {
     }
 
     /**
-     * ChirpStack 다운링크 ack 이벤트({@code application/+/device/+/event/ack}: {@code {queueItemId, acknowledged, deviceInfo:{devEui}}})를
-     * 표준 {@code device.command.ack}로 바꾼다. 모르는 큐 항목이면 false. ChirpStack 이벤트 수신 경로는 ingress가 맡는다(ADR-049 남은 것).
+     * EVT-ACT-09 다운링크 결과(ChirpStack {@code event/ack}·{@code event/txack})를 표준 {@code device.command.ack}로 바꾼다(BR-ACT-25).
+     * <ul>
+     *   <li>ACK: 기기가 확인했으면 ACKED, 확인하지 않았으면 FAILED({@value #NOT_ACKNOWLEDGED}).</li>
+     *   <li>TXACK: 비확인형(unconfirmed) 다운링크는 게이트웨이 송신이 마지막 신호라 ACKED. 확인형은 기기 확인(ACK)을 기다리므로 바꾸지 않는다.</li>
+     *   <li>모르는 종류는 바꾸지 않는다.</li>
+     * </ul>
+     *
+     * @param commandId 큐 항목 ID로 찾은 명령(DB {@code commands.downlink_queue_item_id})
+     * @param confirmed 등록할 때 확인형이었는가
      */
-    public boolean onDownlinkAck(String queueItemId, boolean acknowledged) {
-        Pending p = queueItemId == null ? null : byQueueItem.remove(queueItemId);
-        if (p == null) {
-            return false;
-        }
-        sink.ack(p.organizationId(), acknowledged
-                ? DeviceCommandAck.acked(p.commandId().toString(), p.deviceId(), clock.instant(), false)
-                : DeviceCommandAck.failed(p.commandId().toString(), p.deviceId(), "DOWNLINK_NOT_ACKNOWLEDGED", clock.instant(), false));
-        return true;
+    public static Optional<DeviceCommandAck> commandAck(UUID commandId, long deviceId, LoRaWanDownlinkAck ack, boolean confirmed) {
+        return switch (ack.effectiveKind()) {
+            case ACK -> Optional.of(ack.acknowledged()
+                    ? DeviceCommandAck.acked(commandId.toString(), deviceId, ack.at(), false)
+                    : DeviceCommandAck.failed(commandId.toString(), deviceId, NOT_ACKNOWLEDGED, ack.at(), false));
+            case TXACK -> confirmed ? Optional.empty() : Optional.of(DeviceCommandAck.acked(commandId.toString(), deviceId, ack.at(), false));
+            case UNKNOWN -> Optional.empty();
+        };
     }
 
     /**
@@ -199,8 +208,8 @@ public class LoRaWanDriver implements DeviceDriver {
         // push 없음: 업링크는 플랫폼 수집 경로로 들어온다
     }
 
-    private static DriverResult accepted(String queueId) {
-        return new DriverResult(DriverResult.Status.ACCEPTED, null, false, Map.of("queueItemId", queueId));
+    private static DriverResult accepted(Queued q) {
+        return new DriverResult(DriverResult.Status.ACCEPTED, null, false, Map.of("queueItemId", q.queueItemId(), "confirmed", q.confirmed()));
     }
 
     private String baseUrl(DriverConfig config) {

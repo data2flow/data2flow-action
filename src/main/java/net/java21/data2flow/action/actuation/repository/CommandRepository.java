@@ -78,6 +78,34 @@ public class CommandRepository {
                 .param("r", json).param("id", id).update();
     }
 
+    /** LoRaWAN 다운링크 큐 항목 ID(ChirpStack 등록 응답)를 명령에 남긴다(EVT-ACT-09로 찾는다, ACT-03.03) */
+    @OrganizationScopeExempt("명령 ID(전역 고유 UUID)로 갱신")
+    public void saveDownlinkQueueItem(UUID id, String queueItemId) {
+        jdbc.sql("UPDATE data2flow_action.commands SET downlink_queue_item_id = :q WHERE id = :id")
+                .param("q", queueItemId).param("id", id).update();
+    }
+
+    /**
+     * 다운링크 큐 항목으로 찾은 명령(EVT-ACT-09).
+     *
+     * @param confirmed 등록할 때 확인형(confirmed) 다운링크였는가(드라이버 응답 요약 {@code confirmed}, 없으면 true)
+     */
+    public record DownlinkTarget(UUID commandId, long deviceId, CommandStatus status, boolean confirmed) {
+    }
+
+    /** 조직의 다운링크 큐 항목 → 명령. 큐 항목 ID는 ChirpStack이 만든 UUID라 조직 안에서 하나다 */
+    public Optional<DownlinkTarget> findByDownlinkQueueItem(long organizationId, String queueItemId) {
+        return jdbc.sql("""
+                        SELECT id, device_id, status, COALESCE((driver_response ->> 'confirmed')::boolean, true) AS confirmed
+                          FROM data2flow_action.commands
+                         WHERE organization_id = :org AND downlink_queue_item_id = :q
+                         ORDER BY requested_at DESC LIMIT 1""")
+                .param("org", organizationId).param("q", queueItemId)
+                .query((rs, n) -> new DownlinkTarget(rs.getObject("id", UUID.class), rs.getLong("device_id"),
+                        CommandStatus.valueOf(rs.getString("status")), rs.getBoolean("confirmed")))
+                .optional();
+    }
+
     public Optional<Command> findByKey(long organizationId, String idempotencyKey) {
         return jdbc.sql("SELECT " + COLUMNS + " FROM data2flow_action.commands WHERE organization_id = :org AND idempotency_key = :key")
                 .param("org", organizationId).param("key", idempotencyKey).query(MAPPER).optional();

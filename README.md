@@ -28,7 +28,7 @@
 | 방향 | 채널 | 내용 |
 |---|---|---|
 | 소비 | `data2flow.actions` · `command` → `action.commands`(Quorum, DLX) | `ActionRequest` v1 kind=COMMAND(flow-engine·core 아웃박스). `executed_actions`로 한 번만 실행 |
-| 소비 | `data2flow.events` → `action.events` | `device.command.ack`, `device.state.reported`(EVT-SIM-03 시뮬레이터 상태 보고, pipeline LoRaWAN 업링크 신호 = 빈 `capabilities` → 상태 쌍은 그대로 두고 마지막 업링크 시각만 갱신·Class A 대기 다운링크 전송), `device.connectivity.changed`, `device.changed` |
+| 소비 | `data2flow.events` → `action.events` | `device.command.ack`, `device.state.reported`(EVT-SIM-03 시뮬레이터 상태 보고, pipeline LoRaWAN 업링크 신호 = 빈 `capabilities` → 상태 쌍은 그대로 두고 마지막 업링크 시각만 갱신·Class A 대기 다운링크 전송), `device.connectivity.changed`, `device.changed`, `lorawan.downlink.ack`(EVT-ACT-09: ingress가 낸 ChirpStack 다운링크 결과 → `commands.downlink_queue_item_id`로 찾은 명령 ACKED/FAILED) |
 | 소비 | `data2flow.config` → 임시 큐 | 캐시 무효화: DEVICE(그 기기)·MODEL(그 모델)·DRIVER(연결된 기기)·CAPABILITY(그 기능을 쓰는 기기)·SPACE·SETTING(전체)·SIM_SANDBOX(샌드박스 목록) |
 | 발행(아웃박스) | `data2flow.events` | `command.status.{status}`(EVT-ACT-01), `device.state.changed`(EVT-ACT-02) |
 | 호출 | core 내부 API | 제어 프로필(API-ACT-40), 샌드박스 공간(API-ACT-41), 관계 대상(API-DEV-128), 권한 판정, 감사(API-IAM-39, 아웃박스) |
