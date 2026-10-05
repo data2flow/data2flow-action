@@ -83,6 +83,16 @@
 - 텔레그램 채널은 `data2flow.action.notification.telegram.enabled=true`일 때만 발송합니다(기본 꺼짐). 봇 토큰은 core 알림 채널 정의에 암호화돼 있고 core가 복호화해 넘깁니다. 시험은 Bot API 목만 씁니다.
 - MySQL 대상은 MariaDB Connector/J(LGPL-2.1, 수정 없이)로 씁니다. MySQL Connector/J(GPL)는 쓰지 않습니다(ADR-018).
 
+## M5 출력 연결 (DSC-04.01, ADR-055)
+
+패키지 `output`(actuation·notification과 분리)이 표준 텔레메트리를 외부 MQTT 브로커·Webhook으로 보냅니다. Flyway `V202610110900__action_output`(`output_deliveries`, `output_sender_leases`).
+
+- 소비: Super Stream `data2flow.telemetry`를 그룹 `action-output`(로컬 `action-output-<DATA2FLOW_DEVELOPER>`)으로 따로 읽어 플로우·수집과 지연이 섞이지 않습니다. 파티션마다 활성 소비자 하나, DB 커밋 뒤에만 오프셋을 저장합니다.
+- 정의는 core 내부 API-DSC-73(30초마다, `ConfigChangedMessage` OUTPUT이면 즉시), 기기 맥락은 API-DSC-74(60초 캐시). `OutputFilter`로 거르고 `OutputTopicTemplate`로 토픽을 만들어 연결마다 `output_deliveries`에 멱등으로 쌓습니다.
+- 발송: 연결마다 리스를 잡은 파드 하나가 순서대로 보냅니다. 실패는 1초→2배→최대 5분 백오프로 24시간, 그 뒤 FAILED(재전송 API-DSC-77). 1분 지표는 core API-DSC-75, 테스트 발송은 API-DSC-76. 보낸·실패 행은 7일 뒤 지웁니다.
+- MQTT(hivemq, mqtt·mqtts·ws·wss, QoS 0·1)·Webhook(JDK HTTP, 묶음·`HEADER_VALUE`·`HMAC_KEY` 서명). 공용 브로커 `iot-data.java21.net`(하위 도메인·같은 IP 포함)에는 접속하지 않습니다(CLAUDE.md §5).
+- 설정 `data2flow.action.output.*`: `DATA2FLOW_ACTION_OUTPUT_CONSUMER_ENABLED`·`_SENDER_ENABLED`(기본 true, local false), Stream 포트 `DATA2FLOW_RABBITMQ_STREAM_PORT`(5552).
+
 ## 빌드와 실행
 
 ```bash
