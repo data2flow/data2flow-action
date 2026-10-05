@@ -23,7 +23,7 @@ import java.util.Set;
  *   <li>API-ACT-40 {@code GET /internal/core/devices/{device-id}/control-profile}: 제어 프로필(기기·모델 기능·제약·보호·드라이버·조직 설정)</li>
  *   <li>API-ACT-41 {@code GET /internal/core/sim/sandbox-spaces}: 샌드박스 공간(하위 포함 펼침, BR-ACT-23)</li>
  *   <li>API-DEV-128 {@code GET /internal/core/spaces/{space-id}/devices?relation=CONTROLS&capability=&includeDescendants=}: 관계 대상 펼치기</li>
- *   <li>{@code GET /internal/core/organizations/{organization-id}/users/{user-id}/access-grant}: 권한 판정(IAM-04.01)</li>
+ *   <li>{@code GET /internal/core/organizations/{organization-id}/users/{user-id}/access-grant?accessTokenId=}: 권한 판정(IAM-04.01, 장기 토큰 주체는 IAM-05.01)</li>
  *   <li>API-ACT-44 {@code GET /internal/core/devices/{device-id}/interlocks}: 기기에 걸리는 인터락(BR-ACT-11)</li>
  *   <li>API-ACT-45 {@code GET /internal/core/metric-values?metric=&deviceId=|spaceId=&at=}: 측정값(인터락·효과 확인)</li>
  *   <li>API-ACT-46 {@code GET /internal/core/emergency-stops?active=true}: 진행 중 비상 정지(BR-ACT-12)</li>
@@ -74,9 +74,19 @@ public class CoreClient {
         return out;
     }
 
-    /** 사용자 권한(없는 사용자·비활성·다른 조직이면 권한 없음) */
+    /** 웹 신원의 권한(없는 사용자·비활성·다른 조직이면 권한 없음) */
     public AccessGrant accessGrant(long organizationId, long userId) {
-        JsonNode body = get("/internal/core/organizations/{org}/users/{user}/access-grant", organizationId, userId);
+        return accessGrant(organizationId, userId, null);
+    }
+
+    /**
+     * 신원의 권한. 장기 토큰 주체면 {@code ?accessTokenId=}로 묻는다 — core가 소유자 권한 ∩ 토큰 범위·공간(서비스 계정은 범위 권한)으로
+     * 판정한다(IAM-05.01·IAM-04.07). 웹 신원이면 {@code accessTokenId}는 null
+     */
+    public AccessGrant accessGrant(long organizationId, long userId, Long accessTokenId) {
+        JsonNode body = accessTokenId == null
+                ? get("/internal/core/organizations/{org}/users/{user}/access-grant", organizationId, userId)
+                : get("/internal/core/organizations/{org}/users/{user}/access-grant?accessTokenId={token}", organizationId, userId, accessTokenId);
         if (body == null) {
             return AccessGrant.none();
         }

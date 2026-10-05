@@ -26,13 +26,15 @@ import java.util.regex.Pattern;
 public final class FakeCore extends Dispatcher {
 
     private static final Pattern PROFILE = Pattern.compile("/internal/core/devices/(\\d+)/control-profile");
-    private static final Pattern GRANT = Pattern.compile("/internal/core/organizations/(\\d+)/users/(\\d+)/access-grant");
+    private static final Pattern GRANT = Pattern.compile("/internal/core/organizations/(\\d+)/users/(\\d+)/access-grant(?:\\?accessTokenId=(\\d+))?");
     private static final Pattern SPACE_DEVICES = Pattern.compile("/internal/core/spaces/(\\d+)/devices.*");
 
     public final MockWebServer server = new MockWebServer();
     public final Map<Long, ControlProfile> profiles = new ConcurrentHashMap<>();
     public final Set<Long> sandbox = ConcurrentHashMap.newKeySet();
     public final Map<Long, String> roles = new ConcurrentHashMap<>();
+    /** 장기 토큰 ID → 역할(토큰 주체 판정 흉내, IAM-05.01). 없으면 사용자 역할 */
+    public final Map<Long, String> tokenRoles = new ConcurrentHashMap<>();
     public final Map<Long, List<Long>> spaceDevices = new ConcurrentHashMap<>();
     public final List<JsonNode> audits = new CopyOnWriteArrayList<>();
     public final AtomicInteger profileCalls = new AtomicInteger();
@@ -63,6 +65,7 @@ public final class FakeCore extends Dispatcher {
         profiles.clear();
         sandbox.clear();
         roles.clear();
+        tokenRoles.clear();
         spaceDevices.clear();
         audits.clear();
         profileCalls.set(0);
@@ -94,7 +97,8 @@ public final class FakeCore extends Dispatcher {
         }
         m = GRANT.matcher(path);
         if (m.matches()) {
-            String role = roles.get(Long.parseLong(m.group(2)));
+            String role = m.group(3) != null && tokenRoles.containsKey(Long.parseLong(m.group(3)))
+                    ? tokenRoles.get(Long.parseLong(m.group(3))) : roles.get(Long.parseLong(m.group(2)));
             if (role == null) {
                 return ok(Map.of("active", false));
             }

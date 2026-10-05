@@ -96,7 +96,8 @@ public class ActionConfig {
 
     @Bean
     PermissionLookup permissionLookup(CoreClient core, Clock clock) {
-        return new CachingPermissionLookup(core::accessGrant, Duration.ofSeconds(10), clock);   // BR-IAM-13: 10초 이내 캐시
+        // BR-IAM-13: 10초 이내 캐시. 장기 토큰 요청은 토큰 ID로 따로 판정·캐시한다(IAM-05.01)
+        return new CachingPermissionLookup(PermissionLookup.tokenAware(core::accessGrant), Duration.ofSeconds(10), clock);
     }
 
     private static RestClient client(String baseUrl) {
