@@ -55,7 +55,7 @@ public class InfluxSinkConnector implements SinkConnector {
     public InfluxSinkConnector(Clock clock, Duration connectTimeout) {
         this.clock = clock;
         this.requestTimeout = Duration.ofSeconds(30);
-        this.http = HttpClient.newBuilder().connectTimeout(connectTimeout).build();
+        this.http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).connectTimeout(connectTimeout).build();
     }
 
     @Override

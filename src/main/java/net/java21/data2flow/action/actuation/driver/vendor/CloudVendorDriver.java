@@ -50,7 +50,7 @@ public abstract class CloudVendorDriver implements DeviceDriver {
     private final Map<Long, String> refreshedTokens = new ConcurrentHashMap<>();
 
     protected CloudVendorDriver(String baseUrl, Duration timeout, DriverEventSink sink, Clock clock) {
-        this.http = HttpClient.newBuilder().connectTimeout(timeout).build();
+        this.http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).connectTimeout(timeout).build();
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         this.timeout = timeout;
         this.sink = sink;

@@ -46,7 +46,7 @@ public class WebhookOutputSender {
     private final Clock clock;
 
     public WebhookOutputSender(List<String> deniedHosts, Duration defaultTimeout, Clock clock) {
-        this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).followRedirects(HttpClient.Redirect.NEVER).build();
+        this.http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).connectTimeout(Duration.ofSeconds(5)).followRedirects(HttpClient.Redirect.NEVER).build();
         this.deniedHosts = List.copyOf(deniedHosts);
         this.defaultTimeout = defaultTimeout;
         this.clock = clock;

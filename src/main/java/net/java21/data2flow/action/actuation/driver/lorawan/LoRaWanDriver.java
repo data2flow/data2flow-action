@@ -69,7 +69,7 @@ public class LoRaWanDriver implements DeviceDriver {
     }
 
     public LoRaWanDriver(Duration timeout, List<String> deniedHosts, DriverEventSink sink, Clock clock) {
-        this.http = HttpClient.newBuilder().connectTimeout(timeout).build();
+        this.http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).connectTimeout(timeout).build();
         this.timeout = timeout;
         this.deniedHosts = deniedHosts == null ? List.of() : List.copyOf(deniedHosts);
         this.sink = sink;
