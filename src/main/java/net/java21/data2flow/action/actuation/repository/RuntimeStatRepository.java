@@ -83,6 +83,22 @@ public class RuntimeStatRepository {
                 }).list();
     }
 
+    /** 하루 가동 시간(초): 기기 ID → on_seconds. 집계 행이 없는 기기는 빠진다(ENE-01 추정 사용량) */
+    public Map<Long, Integer> findOnSeconds(long organizationId, LocalDate day, List<Long> deviceIds) {
+        Map<Long, Integer> out = new java.util.LinkedHashMap<>();
+        if (deviceIds.isEmpty()) {
+            return out;
+        }
+        jdbc.sql("""
+                        SELECT device_id, on_seconds FROM data2flow_action.runtime_stat_daily
+                         WHERE organization_id = :org AND day = :day AND device_id = ANY(:ids) ORDER BY device_id""")
+                .param("org", organizationId).param("day", day).param("ids", deviceIds.toArray(Long[]::new))
+                .query(rs -> {
+                    out.put(rs.getLong("device_id"), rs.getInt("on_seconds"));
+                });
+        return out;
+    }
+
     public record StateRow(String capability, String attribute, Object value, Instant from, Instant to) {
     }
 }
