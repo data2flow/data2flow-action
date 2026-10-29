@@ -102,6 +102,13 @@ class ControlEffectIT extends IntegrationTestSupport {
             onSeconds += i.path("onSeconds").asLong();
         }
         assertThat(onSeconds).isEqualTo(7200);
+        // ENE-01 추정 사용량용 서비스 간 조회: 같은 날짜의 가동 시간, 집계가 없는 기기는 빠진다
+        String date = items.get(items.size() - 1).path("date").asString();
+        var daily = get(operator, "/internal/action/runtime/daily?orgId=" + Fixtures.ORG + "&date=" + date + "&deviceIds=15,999").response();
+        assertThat(daily.path("date").asString()).isEqualTo(date);
+        assertThat(daily.path("items")).hasSize(1);
+        assertThat(daily.path("items").get(0).path("deviceId").asString()).isEqualTo("15");
+        assertThat(daily.path("items").get(0).path("onSeconds").asLong()).isPositive();
         assertThat(runtime.aggregate(Fixtures.ORG, Fixtures.AIRCON, LocalDate.of(2026, 3, 2)).cycles()).isEqualTo(1);
     }
 }

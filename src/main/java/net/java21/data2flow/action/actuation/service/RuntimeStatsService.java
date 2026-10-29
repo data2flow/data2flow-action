@@ -112,4 +112,20 @@ public class RuntimeStatsService {
                 }).toList());
         return out;
     }
+
+    /** 조직의 기기들 하루 가동 시간(ENE-01 추정 사용량, analytics 일 집계가 부른다). 날짜는 집계 시간대 기준 */
+    public Map<String, Object> onSeconds(long organizationId, LocalDate day, List<Long> deviceIds) {
+        List<Map<String, Object>> items = new ArrayList<>();
+        runtime.findOnSeconds(organizationId, day, deviceIds).forEach((device, seconds) -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("deviceId", device.toString());
+            m.put("onSeconds", seconds);
+            items.add(m);
+        });
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("date", day.toString());
+        out.put("timezone", properties.effect().zone().getId());
+        out.put("items", items);
+        return out;
+    }
 }
